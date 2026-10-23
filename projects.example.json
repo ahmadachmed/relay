@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "projects": {
+    "api": {
+      "stack": "robot_api",
+      "repository": "example/api-automation",
+      "default_branch": "main",
+      "allowed_branches": [
+        "main",
+        "develop"
+      ],
+      "report_type": "robot_xml",
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            },
+            "WORKERS": {
+              "kind": "workers",
+              "allowed_values": [
+                "1",
+                "4"
+              ],
+              "default": "1"
+            }
+          }
+        }
+      }
+    },
+    "mobile": {
+      "stack": "robot_appium",
+      "repository": "example/mobile-automation",
+      "default_branch": "master",
+      "allowed_branches": [
+        "master",
+        "develop"
+      ],
+      "report_type": "robot_xml",
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            },
+            "PLATFORM": {
+              "kind": "platform",
+              "allowed_values": [
+                "android",
+                "ios"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "web": {
+      "stack": "pytest_playwright",
+      "repository": "example/web-automation",
+      "default_branch": "main",
+      "allowed_branches": [
+        "main",
+        "develop"
+      ],
+      "report_type": "junit_xml",
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            }
+          }
+        }
+      }
+    }
+  }
+}

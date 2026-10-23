@@ -57,3 +57,7 @@ Report files and console logs may contain secrets. They stay on the local machin
 The Playwright parser is fixture-tested; a live Playwright browser run has not yet been verified. Windows process-tree cancellation is not supported. Persistent chat history, natural-language planning, rerun-failed, PostgreSQL, SSE, remote runners and integrations are roadmap items.
 
 See [architecture](docs/architecture.md) and [implementation plan](docs/plan.md).
+
+## Pipeline registry foundation
+
+The new, separate [project registry](docs/project-registry.md) models Robot API, Robot/Appium and **pytest + Playwright Python**. Start with `projects.example.json` and validate plans at `/api/plans/validate`. This endpoint has no execution side effects. The original local demo remains compatible; its legacy Node Playwright adapter is not suitable for pytest projects. Bitbucket connection and execution are follow-up work.

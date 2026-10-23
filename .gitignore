@@ -8,3 +8,4 @@ relay.local.json
 node_modules/
 test-results/
 playwright-report/
+projects.local.json
