@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.env
+relay.local.json
+.relay/
+node_modules/
+test-results/
+playwright-report/

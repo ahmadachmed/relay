@@ -1,0 +1,27 @@
+{
+  "projects": {
+    "robot-api": {
+      "adapter": "robot",
+      "enabled": true,
+      "path": ".",
+      "timeout_seconds": 120,
+      "suites": {
+        "smoke": ["--include", "smoke", "examples/robot"],
+        "failure-demo": ["--include", "failure-demo", "examples/robot"]
+      }
+    },
+    "mobile": {
+      "adapter": "unconfigured",
+      "enabled": false,
+      "path": "../mobile-automation",
+      "suites": {}
+    },
+    "web-playwright": {
+      "adapter": "playwright",
+      "enabled": false,
+      "path": "../web-automation",
+      "timeout_seconds": 600,
+      "suites": {"smoke": ["--grep", "@smoke"]}
+    }
+  }
+}
