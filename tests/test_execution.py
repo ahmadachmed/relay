@@ -250,3 +250,51 @@ def test_reconciliation_http_rejects_invalid_uuid_and_non_boolean_attestation(tm
     payload = {'pipeline_uuid': UUID, 'confirmed': True, 'verified_parameters': True, field: value}
     with TestClient(create_app(ROOT / 'relay.example.json', tmp_path)) as client:
         assert client.post('/api/plans/missing/reconcile', json=payload).status_code == 422
+
+
+def test_recovery_expiration_only_for_unclaimed_preview(tmp_path):
+    s = service(tmp_path)
+    record = preview(s)
+    assert s.recovery_snapshot(record['id'])['expired_unclaimed'] is False
+    record['expires_at'] = 0
+    s.save(record)
+    assert s.recovery_snapshot(record['id'])['expired_unclaimed'] is True
+    record['status'] = 'unknown'
+    s.save(record)
+    assert not s.recovery_snapshot(record['id']).get('expired_unclaimed', False)
+
+
+def test_recovery_waits_for_claim_across_expiration(tmp_path, monkeypatch):
+    import threading
+    import time
+    from relay.contracts import ExecutionPlan
+    s = service(tmp_path)
+    record = preview(s)
+    deadline = record['expires_at']
+    reached, resume, reading = threading.Event(), threading.Event(), threading.Event()
+    original = ExecutionPlan.model_validate_json
+    def paused(*args, **kwargs):
+        reached.set()
+        assert resume.wait(5)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ExecutionPlan, 'model_validate_json', paused)
+    other = service(tmp_path)
+    def read():
+        reading.set()
+        return other.recovery_snapshot(record['id'])
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claim = pool.submit(s.claim, record['id'])
+        try:
+            assert reached.wait(3)
+            monkeypatch.setattr(time, 'time', lambda: deadline + 1)
+            snapshot = pool.submit(read)
+            assert reading.wait(3)
+            from concurrent.futures import TimeoutError
+            with pytest.raises(TimeoutError):
+                snapshot.result(timeout=0.1)
+        finally:
+            resume.set()
+        assert claim.result()[1] is True
+        value = snapshot.result()
+        assert value['status'] == 'unknown'
+        assert not value.get('expired_unclaimed', False)

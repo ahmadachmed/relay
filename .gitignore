@@ -10,3 +10,9 @@ test-results/
 playwright-report/
 projects.local.json
 mcp.local.json
+
+frontend/.next/
+frontend/out/
+frontend/playwright-report/
+frontend/test-results/
+*.tsbuildinfo

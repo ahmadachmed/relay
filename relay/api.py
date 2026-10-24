@@ -4,7 +4,8 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .runner import Runner
 from .registry import load_registry, resolve_plan
@@ -56,8 +57,18 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
             return JSONResponse({'detail': 'Cross-origin access denied'}, status_code=403)
         return await call_next(request)
 
+    ui_dir = ROOT / 'frontend' / 'out'
+    if ui_dir.is_dir():
+        app.mount('/ui', StaticFiles(directory=ui_dir, html=True), name='workspace-ui')
+
     @app.get('/')
     def index():
+        if (ui_dir / 'index.html').is_file():
+            return RedirectResponse('/ui/')
+        return FileResponse(ROOT / 'web' / 'index.html')
+
+    @app.get('/legacy')
+    def legacy_index():
         return FileResponse(ROOT / 'web' / 'index.html')
 
     @app.exception_handler(PlanError)
@@ -77,7 +88,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
 
     @app.get('/api/plans/{plan_id}')
     def get_plan(plan_id: str):
-        return execution.get(plan_id)
+        return execution.recovery_snapshot(plan_id)
 
     @app.post('/api/plans/{plan_id}/execute')
     async def execute_plan(plan_id: str, body: Confirmation):
