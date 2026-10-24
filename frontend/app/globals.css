@@ -1682,3 +1682,219 @@ select {
     font-size: 8px;
   }
 }
+
+/* Theme choice is stored locally; System follows the operating system. */
+:root {
+  color-scheme: light;
+}
+.theme-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #7b8490;
+}
+.theme-picker select {
+  padding: 6px 4px;
+  font-size: 10px;
+  background: transparent;
+  cursor: pointer;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #15181e;
+  --ink: #e9edf2;
+  --muted: #aab3bf;
+  --line: #343b47;
+  --clay: #ed936c;
+  --clay-dark: #f4ac88;
+}
+html[data-theme="dark"]
+  :is(
+    .sidebar,
+    .topbar,
+    .context-panel,
+    .welcome-action,
+    .plan-card,
+    .run-card,
+    .evidence-card,
+    .composer,
+    button
+  ) {
+  background: #1d222a;
+  border-color: var(--line);
+}
+html[data-theme="dark"]
+  :is(.brand, .welcome-action strong, .context-heading, .card-heading h2) {
+  color: var(--ink);
+}
+html[data-theme="dark"]
+  :is(
+    .workspace-label,
+    .sidebar-footer,
+    .card-heading,
+    .step,
+    .test-list,
+    .test-list details,
+    .artifacts > div,
+    .parameter-heading
+  ) {
+  border-color: var(--line);
+}
+html[data-theme="dark"]
+  :is(
+    .workspace-avatar,
+    .repo-note,
+    .parameter-review > span,
+    .upload-panel,
+    .test-list pre,
+    .context-chips > span,
+    .badge,
+    .step-index,
+    .plan-footer
+  ) {
+  background: #252c36;
+  border-color: var(--line);
+  color: #c4cdd8;
+}
+html[data-theme="dark"] :is(select, .context-panel select) {
+  background: #171c23;
+  border-color: #414b59;
+  color: #e0e6ee;
+}
+html[data-theme="dark"] .theme-picker select {
+  background: transparent;
+}
+html[data-theme="dark"]
+  :is(
+    .theme-picker,
+    small,
+    .intro,
+    .welcome p,
+    .message p,
+    .message-author,
+    .workspace-label small,
+    .breadcrumb,
+    .context-description,
+    .context-panel label,
+    .context-panel label small,
+    .repo-note code,
+    .context-chips .muted-chip,
+    .welcome-action small,
+    .history-item small,
+    .history-item svg,
+    .sidebar-footer,
+    .sidebar-footer small,
+    .section-label,
+    .plan-grid dt,
+    .parameter-review small,
+    .parameter-heading,
+    .parameter-heading span,
+    .card-heading p,
+    .run-info,
+    .run-info b,
+    .plan-footer > span,
+    .upload-panel p,
+    .attestation,
+    .upload-panel > small,
+    .context-bottom,
+    .composer-wrap > p,
+    .composer-wrap kbd,
+    .empty-history p,
+    .empty-history small,
+    .empty-inline,
+    .loading
+  ) {
+  color: #aab5c3;
+}
+html[data-theme="dark"]
+  :is(
+    .nav-item.selected,
+    .history-item.current,
+    .welcome-icon,
+    .message-avatar,
+    .icon-box,
+    .mode-label
+  ) {
+  background: #382b26;
+  border-color: #604338;
+  color: #f1b08e;
+}
+html[data-theme="dark"] .context-tip {
+  background: #28231f;
+  border-color: #544338;
+  color: #cfb6a3;
+}
+html[data-theme="dark"] .context-tip strong {
+  color: #edc3a4;
+}
+html[data-theme="dark"] :is(.error-banner, .cancel-confirm) {
+  background: #352526;
+  border-color: #77494c;
+  color: #f0b0a4;
+}
+html[data-theme="dark"] .small-error {
+  color: #f0b0a4;
+}
+html[data-theme="dark"] .recovery {
+  background: #302b20;
+  border-color: #665632;
+  color: #e9cc8d;
+}
+html[data-theme="dark"] .recovery p {
+  color: #d4c6a7;
+}
+html[data-theme="dark"] .badge.good {
+  background: #213a30;
+  color: #a0d9b7;
+}
+html[data-theme="dark"] .badge.bad {
+  background: #432b2e;
+  color: #f3b0a9;
+}
+html[data-theme="dark"] .badge.warm {
+  background: #3d3022;
+  color: #f1c18e;
+}
+html[data-theme="dark"] :is(.primary, .composer button) {
+  background: #dc8057;
+  border-color: #dc8057;
+  color: #171311;
+}
+html[data-theme="dark"] button:hover:not(:disabled) {
+  background: #303946;
+}
+html[data-theme="dark"] .primary:hover:not(:disabled) {
+  background: #f1a37d;
+}
+html[data-theme="dark"] :is(a, .text-button) {
+  color: #f2b797;
+}
+html[data-theme="dark"] .composer input {
+  color: var(--ink);
+}
+html[data-theme="dark"] .composer input::placeholder {
+  color: #aab5c3;
+}
+html[data-theme="dark"] .composer-wrap {
+  background: linear-gradient(#15181e00, #15181e 16%);
+}
+@media (max-width: 700px) {
+  .header-actions {
+    gap: 8px !important;
+  }
+  .header-actions .mode-label {
+    display: none;
+  }
+  .theme-picker {
+    gap: 3px;
+  }
+  .theme-picker select {
+    max-width: 80px;
+  }
+}
+html[data-theme="dark"] .new-check { color: #c4cdd8; }
+html[data-theme="dark"] .danger-text { color: #f0b0a4; }
+html[data-theme="dark"] .run-controls { border-color: var(--line); }
+html[data-theme="dark"] .cancel-note { background: #302b20; color: #e9cc8d; }
+
+html[data-theme="dark"] .message.user .message-avatar { background: #252c36; color: #c4cdd8; }

@@ -1,4 +1,5 @@
 "use client";
+import ThemePicker from "../components/theme-picker";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
@@ -633,6 +634,7 @@ export default function Workspace() {
             <strong>QA conversation</strong>
           </div>
           <div className="header-actions">
+            <ThemePicker />
             <span className="mode-label">
               <span />
               Structured commands

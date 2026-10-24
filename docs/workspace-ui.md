@@ -16,6 +16,8 @@ Open http://127.0.0.1:8000/ui/. The root redirects there when the export exists.
 
 Configure projects and Bitbucket credentials on the backend as described in [providers](providers.md). The UI never asks for provider credentials. Keep this server local: authentication and multiple-user isolation are not implemented.
 
+Use the header’s **Color theme** selector for Light, Dark, or System. System follows your operating system; your choice persists in this browser and is applied before the workspace renders.
+
 ## Workflow
 
 1. Select a project, branch, pipeline, and parameters in Execution context. Choices come from the registry.

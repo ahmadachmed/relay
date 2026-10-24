@@ -242,13 +242,11 @@ test("manual evidence upload requires a run assertion and exposes factual result
   await page.getByRole("button", { name: /api/ }).first().click();
   const area = page.getByRole("region", { name: "Test evidence" });
   await expect(area).toContainText("missing");
-  await page
-    .getByLabel("Report file", { exact: true })
-    .setInputFiles({
-      name: "output.xml",
-      mimeType: "application/xml",
-      buffer: Buffer.from("<robot/>"),
-    });
+  await page.getByLabel("Report file", { exact: true }).setInputFiles({
+    name: "output.xml",
+    mimeType: "application/xml",
+    buffer: Buffer.from("<robot/>"),
+  });
   await expect(
     page.getByRole("button", { name: "Upload evidence", exact: true }),
   ).toBeDisabled();
@@ -348,4 +346,42 @@ test("capture reference screenshots with explicitly synthetic fixtures", async (
   await page
     .getByRole("button", { name: "Confirm & run", exact: true })
     .click({ trial: true });
+});
+
+test("theme follows system, preserves explicit choice, and survives reload", async ({
+  page,
+}) => {
+  await fixtures(page);
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/ui/");
+  const theme = page.getByRole("combobox", { name: "Color theme" });
+  await expect(theme).toHaveValue("system");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await theme.selectOption("dark");
+  await page.reload();
+  await expect(theme).toHaveValue("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Preview plan", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Execution plan" }),
+  ).toBeVisible();
+  fs.mkdirSync("../docs/screenshots", { recursive: true });
+  await page.screenshot({
+    path: "../docs/screenshots/workspace-dark-fixture.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await theme.selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await theme.selectOption("system");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
