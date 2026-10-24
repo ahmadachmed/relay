@@ -253,3 +253,21 @@ def test_quoted_authorization_and_following_lines_are_handled():
 def test_escaped_json_digest_credentials_are_redacted():
     value = redact(json.dumps({'Authorization': 'Digest username="alice", response="sensitive-value"'}))
     assert 'alice' not in value and 'sensitive-value' not in value
+
+
+def test_previous_proposal_is_separate_from_current_selection(harness):
+    app, client, fake = harness
+    previous = {'project_id':'api','pipeline_id':'smoke','branch':'develop','parameters':{'ENV':'dev','TAGS':'smoke','WORKERS':'1'}}
+    current = {'project_id':'api','pipeline_id':'smoke','branch':'main','parameters':{'ENV':'uat'}}
+    result = post(client, message='keep that branch and environment, change TAGS', previous_proposal=previous, context=current)
+    assert result.status_code == 200
+    assert fake.calls[0]['previous_proposal'] == previous
+    assert fake.calls[0]['selection']['branch'] == 'main'
+    assert app.state.monitor.list() == []
+
+
+def test_unconfigured_previous_proposal_never_reaches_provider(harness):
+    app, client, fake = harness
+    invalid = {'project_id':'unknown','pipeline_id':'smoke','branch':'main','parameters':{}}
+    assert post(client, previous_proposal=invalid).status_code == 422
+    assert not fake.calls

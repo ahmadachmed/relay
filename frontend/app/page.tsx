@@ -111,6 +111,7 @@ export default function Workspace() {
   const [shareFailures, setShareFailures] = useState(false);
   const [aiReply, setAiReply] = useState<AiReply | null>(null);
   const aiLock = useRef(false);
+  const lastProposal = useRef<AiReply["answer"]["selection"]>(null);
   useEffect(() => {
     void api<{ enabled: boolean; configured: boolean }>("/api/assistant")
       .then((s) => setAiEnabled(s.enabled && s.configured))
@@ -316,6 +317,7 @@ export default function Workspace() {
   }, [loadHistory]);
   useEffect(() => {
     activeRun.current = selected;
+    lastProposal.current = null;
     setAiReply(null);
     setRun(null);
     setEvidence(null);
@@ -386,6 +388,7 @@ export default function Workspace() {
 
   function changeContext(next: Context) {
     revision.current++;
+    lastProposal.current = null;
     setContext(next);
     setAiReply(null);
     setPlan(null);
@@ -589,6 +592,7 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
+        previous_proposal: lastProposal.current,
         context: project?.enabled && pipeline && context.branch
           ? {
               project_id: context.project,
@@ -603,6 +607,7 @@ export default function Workspace() {
           .map((m) => ({ role: m.role, text: m.text.slice(0, 4000) })),
       });
       if (version === revision.current) {
+        if (value.answer.action === "propose") lastProposal.current = value.answer.selection;
         setAiReply(value);
         addMessage({
           role: "relay",
@@ -680,6 +685,7 @@ export default function Workspace() {
             setEvidence(null);
             setPlan(null);
             setMessages([initialMessage]);
+            lastProposal.current = null;
             setAiReply(null);
             setHistoryOpen(false);
           }}

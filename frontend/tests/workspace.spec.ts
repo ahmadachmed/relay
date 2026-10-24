@@ -692,3 +692,25 @@ test('AI receives partial context when a required platform is missing',async({pa
  await expect.poll(()=>sent?.context).toMatchObject({project_id:'mobile',pipeline_id:'smoke',branch:'main',parameters:{ENV:'uat',TAGS:'smoke'}});
  expect(sent.context.parameters).not.toHaveProperty('PLATFORM');
 });
+
+test('follow-up retains unapplied proposal separately from current context',async({page})=>{
+ await fixtures(page);
+ await page.route('**/api/assistant',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({enabled:true,configured:true})}));
+ const requests:any[]=[];
+ const selection={project_id:'api',pipeline_id:'smoke',branch:'develop',parameters:{ENV:'dev',TAGS:'smoke'}};
+ await page.route('**/api/assistant/chat',r=>{
+ requests.push(r.request().postDataJSON());
+ return r.fulfill({contentType:'application/json',body:JSON.stringify({run_id:null,facts:null,limitations:[],answer:{action:'propose',message:'Suggested check is below.',selection,hypotheses:[],bug_report_draft:null}})});
+ });
+ await page.goto('/ui/');
+ await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').check();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('suggest a check');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByRole('button',{name:'Use proposed context'})).toBeVisible();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('keep that branch and environment, change TAGS to regression');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await expect.poll(()=>requests.length).toBe(2);
+ expect(requests[1].previous_proposal).toEqual(selection);
+ expect(requests[1].context.branch).toBe('main');
+ await expect(page.getByLabel('Branch',{exact:true})).toHaveValue('main');
+});
