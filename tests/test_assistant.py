@@ -271,3 +271,28 @@ def test_unconfigured_previous_proposal_never_reaches_provider(harness):
     invalid = {'project_id':'unknown','pipeline_id':'smoke','branch':'main','parameters':{}}
     assert post(client, previous_proposal=invalid).status_code == 422
     assert not fake.calls
+
+
+@pytest.mark.parametrize('field', ['password', 'api_key', 'secret'])
+@pytest.mark.parametrize('secret', ['prefix"private-suffix', 'prefix\\private-suffix', 'prefix\\"private-suffix', 'prefix\nprivate-suffix'])
+def test_escaped_secret_fields_do_not_cross_provider_boundary(harness, monkeypatch, field, secret):
+    app, client, fake = harness
+    monkeypatch.setenv('TEST_SECRET', secret)
+    assert post(client, message=json.dumps({field:secret})).status_code == 200
+    assert 'private-suffix' not in json.dumps(fake.calls)
+
+
+@pytest.mark.parametrize('header', ['Cookie', 'Set-Cookie', 'cookie'])
+def test_all_cookie_values_are_redacted_before_provider(harness, header):
+    app, client, fake = harness
+    assert post(client, message=f'{header}: session=synthetic-session; refresh=synthetic-refresh\nAccept: application/json').status_code == 200
+    sent = json.dumps(fake.calls)
+    assert 'synthetic-session' not in sent
+    assert 'synthetic-refresh' not in sent
+    assert 'Accept: application/json' in sent
+
+
+def test_escaped_single_quoted_assignment_and_adjacent_fields():
+    value = redact("password='prefix\\'private-suffix'; visible=ok")
+    assert 'private-suffix' not in value
+    assert 'visible=ok' in value

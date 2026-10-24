@@ -79,11 +79,11 @@ def redact(value):
         if len(secret) >= 4 and re.search(r'KEY|TOKEN|PASSWORD|SECRET|CREDENTIAL', key, re.I):
             value = value.replace(secret, '[REDACTED]')
     value = re.sub(r'-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----', '[REDACTED]', value)
-    # Auth values can contain spaces, commas, quotes and escaped JSON strings.
+    # Auth and cookie values can contain spaces, commas, quotes and escaped JSON strings.
     # Fail closed through the line boundary rather than exposing a credential suffix.
-    value = re.sub(r'(?im)(["\']?\b(?:proxy-)?authorization["\']?\s*[:=]\s*)[^\r\n]+', r'\1[REDACTED]', value)
+    value = re.sub(r'(?im)(["\']?\b(?:(?:proxy-)?authorization|(?:set-)?cookie)["\']?\s*[:=]\s*)[^\r\n]+', r'\1[REDACTED]', value)
     value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [REDACTED]', value)
-    value = re.sub(r'(?i)(["\']?(?:password|secret|token|api[_-]?key|authorization|cookie|otp)["\']?\s*[:=]\s*)(?:"[^"]*"|\'[^\']*\'|[^\s,;]+)', r'\1[REDACTED]', value)
+    value = re.sub(r'(?i)(["\']?(?:password|secret|token|api[_-]?key|authorization|cookie|otp)["\']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[^\s,;]+)', r'\1[REDACTED]', value)
     value = re.sub(r'https?://[^\s<>"\']+', '[URL]', value)
     value = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[EMAIL]', value)
     value = re.sub(r'(?<!\w)\+?\d[\d ()-]{7,}\d(?!\w)', '[NUMBER]', value)
