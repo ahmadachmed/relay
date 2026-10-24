@@ -72,3 +72,7 @@ Confirmed remote preview/trigger and recovery: [execution API](docs/execution.md
 Remote run history, polling and cancel: [monitoring API](docs/monitoring.md).
 
 Report upload and evidence parsing: [evidence API](docs/evidence.md).
+
+## Chat-first remote workspace
+
+Build the Next.js frontend and serve it from the Python backend: see [workspace UI setup and testing](docs/workspace-ui.md). It provides registry-based preview, confirmed execution, progress, cancellation, and manual evidence upload.
