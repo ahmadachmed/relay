@@ -70,8 +70,8 @@ Other unsuccessful statuses (including redirects) become `upstream_error`.
 Malformed pipeline data fails without reporting a successful connection.
 
 The catalog endpoint remains read-only. Confirmed trigger and manual reconciliation
-are documented in [execution.md](execution.md). Remote status, cancellation, and
-artifacts remain subsequent work. Do not expose the local backend publicly;
+are documented in [execution.md](execution.md). Remote status and cancellation are documented in
+[monitoring.md](monitoring.md); artifacts remain subsequent work. Do not expose the local backend publicly;
 it has no multi-user authentication. Credentials stay in the backend environment.
 
 References:
