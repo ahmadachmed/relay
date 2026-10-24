@@ -386,60 +386,293 @@ test("theme follows system, preserves explicit choice, and survives reload", asy
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
 
- test("failed recovery retains its action and blocks a new preview", async ({page}) => {
- await fixtures(page);
- await page.addInitScript(id => localStorage.setItem("relay.ui.attemptedPlan", id), id);
- let previews=0;
- await page.route("**/api/plans/preview", r => { previews++; return r.abort(); });
- await page.route(`**/api/plans/${id}`, r => r.fulfill({status:502,contentType:"application/json",body:JSON.stringify({detail:"Temporary recovery error"})}));
- await page.goto("/ui/");
- await expect(page.getByText("Temporary recovery error")).toBeVisible();
- await expect(page.getByRole("button",{name:"Check status",exact:true})).toBeVisible();
- await page.getByRole("button",{name:"Preview plan",exact:true}).click();
- expect(previews).toBe(0);
- });
-
-for (const code of ["stale_plan", "expired_plan"]) {
- test(`${code} permits fresh preview after reload`,async({page})=>{
- await fixtures(page);
- let previews=0;
- await page.route("**/api/plans/preview",r=>{previews++;return r.fulfill({contentType:"application/json",body:JSON.stringify(pinned)});});
- await page.route(`**/api/plans/${id}/execute`,r=>r.fulfill({status:409,contentType:"application/json",body:JSON.stringify({detail:{code,message:"Preview again"}})}));
- await page.goto("/ui/");
- await page.getByRole("button",{name:"Preview plan",exact:true}).click();
- await page.getByRole("button",{name:"Confirm & run",exact:true}).click();
- await expect(page.getByRole("alert").filter({hasText:"Preview again"})).toBeVisible();
- await expect(page.getByRole("button",{name:"Check status",exact:true})).toHaveCount(0);
- expect(await page.evaluate(()=>localStorage.getItem("relay.ui.attemptedPlan"))).toBe("");
- await page.reload();
- await page.getByRole("button",{name:"Preview plan",exact:true}).click();
- await expect.poll(()=>previews).toBe(2);
- });
-}
-
-test('expired unclaimed recovery unlocks a fresh preview',async({page})=>{
- await fixtures(page);
- await page.addInitScript(id=>localStorage.setItem('relay.ui.attemptedPlan',id),id);
- await page.route(`**/api/plans/${id}`,r=>r.fulfill({contentType:'application/json',body:JSON.stringify({...pinned,expired_unclaimed:true,expires_at:Date.now()/1000-60})}));
- await page.goto('/ui/');
- await page.getByRole('button',{name:'Preview plan',exact:true}).click();
- await expect(page.getByRole('region',{name:'Execution plan'})).toBeVisible();
- expect(await page.evaluate(()=>localStorage.getItem('relay.ui.attemptedPlan'))).toBe('');
+test("failed recovery retains its action and blocks a new preview", async ({
+  page,
+}) => {
+  await fixtures(page);
+  await page.addInitScript(
+    (id) => localStorage.setItem("relay.ui.attemptedPlan", id),
+    id,
+  );
+  let previews = 0;
+  await page.route("**/api/plans/preview", (r) => {
+    previews++;
+    return r.abort();
+  });
+  await page.route(`**/api/plans/${id}`, (r) =>
+    r.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Temporary recovery error" }),
+    }),
+  );
+  await page.goto("/ui/");
+  await expect(page.getByText("Temporary recovery error")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Check status", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Preview plan", exact: true }).click();
+  expect(previews).toBe(0);
 });
 
-test('failed older-history request retries the same offset',async({page})=>{
- await fixtures(page);
- const offsets:number[]=[];
- await page.route('**/api/remote-runs**',r=>{
- const u=new URL(r.request().url());if(u.pathname!='/api/remote-runs')return r.fallback();
- const offset=Number(u.searchParams.get('offset')||0);offsets.push(offset);
- if(offset===0)return r.fulfill({contentType:'application/json',body:JSON.stringify(Array.from({length:30},(_,i)=>({...run,id:String(i).padStart(32,'0')})))});
- if(offsets.length===2)return r.fulfill({status:502,contentType:'application/json',body:JSON.stringify({detail:'History temporarily unavailable'})});
- return r.fulfill({contentType:'application/json',body:'[]'});
- });
- await page.goto('/ui/');
- await page.getByRole('button',{name:'Load older runs',exact:true}).click();
- await expect(page.getByText('History temporarily unavailable')).toBeVisible();
- await page.getByRole('button',{name:'Load older runs',exact:true}).click();
- await expect.poll(()=>offsets).toEqual([0,30,30]);
+for (const code of ["stale_plan", "expired_plan"]) {
+  test(`${code} permits fresh preview after reload`, async ({ page }) => {
+    await fixtures(page);
+    let previews = 0;
+    await page.route("**/api/plans/preview", (r) => {
+      previews++;
+      return r.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(pinned),
+      });
+    });
+    await page.route(`**/api/plans/${id}/execute`, (r) =>
+      r.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: { code, message: "Preview again" } }),
+      }),
+    );
+    await page.goto("/ui/");
+    await page
+      .getByRole("button", { name: "Preview plan", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Confirm & run", exact: true })
+      .click();
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Preview again" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Check status", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(() => localStorage.getItem("relay.ui.attemptedPlan")),
+    ).toBe("");
+    await page.reload();
+    await page
+      .getByRole("button", { name: "Preview plan", exact: true })
+      .click();
+    await expect.poll(() => previews).toBe(2);
+  });
+}
+
+test("expired unclaimed recovery unlocks a fresh preview", async ({ page }) => {
+  await fixtures(page);
+  await page.addInitScript(
+    (id) => localStorage.setItem("relay.ui.attemptedPlan", id),
+    id,
+  );
+  await page.route(`**/api/plans/${id}`, (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...pinned,
+        expired_unclaimed: true,
+        expires_at: Date.now() / 1000 - 60,
+      }),
+    }),
+  );
+  await page.goto("/ui/");
+  await page.getByRole("button", { name: "Preview plan", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Execution plan" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(() => localStorage.getItem("relay.ui.attemptedPlan")),
+  ).toBe("");
+});
+
+test("failed older-history request retries the same offset", async ({
+  page,
+}) => {
+  await fixtures(page);
+  const offsets: number[] = [];
+  await page.route("**/api/remote-runs**", (r) => {
+    const u = new URL(r.request().url());
+    if (u.pathname != "/api/remote-runs") return r.fallback();
+    const offset = Number(u.searchParams.get("offset") || 0);
+    offsets.push(offset);
+    if (offset === 0)
+      return r.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(
+          Array.from({ length: 30 }, (_, i) => ({
+            ...run,
+            id: String(i).padStart(32, "0"),
+          })),
+        ),
+      });
+    if (offsets.length === 2)
+      return r.fulfill({
+        status: 502,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "History temporarily unavailable" }),
+      });
+    return r.fulfill({ contentType: "application/json", body: "[]" });
+  });
+  await page.goto("/ui/");
+  await page
+    .getByRole("button", { name: "Load older runs", exact: true })
+    .click();
+  await expect(page.getByText("History temporarily unavailable")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Load older runs", exact: true })
+    .click();
+  await expect.poll(() => offsets).toEqual([0, 30, 30]);
+});
+
+test("AI is opt-in and proposals invalidate the previous plan without executing", async ({
+  page,
+}) => {
+  const state = await fixtures(page);
+  await page.route("**/api/assistant", (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ enabled: true, configured: true }),
+    }),
+  );
+  let aiCalls = 0;
+  await page.route("**/api/assistant/chat", (r) => {
+    aiCalls++;
+    expect(r.request().postDataJSON().share_context).toBe(true);
+    expect(r.request().postDataJSON().include_failure_details).toBe(false);
+    return r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: null,
+        facts: null,
+        limitations: ["AI suggestions can be wrong."],
+        answer: {
+          action: "propose",
+          message: "Try dev regression on develop.",
+          selection: {
+            project_id: "api",
+            pipeline_id: "smoke",
+            branch: "develop",
+            parameters: { ENV: "dev", TAGS: "regression" },
+          },
+          hypotheses: [],
+          bug_report_draft: null,
+        },
+      }),
+    });
+  });
+  await page.goto("/ui/");
+  const command = page.getByRole("textbox", { name: "Structured command" });
+  await command.fill("run regression on dev");
+  await page.getByRole("button", { name: "Send command" }).click();
+  expect(aiCalls).toBe(0);
+  await page.getByRole("button", { name: "Preview plan", exact: true }).click();
+  await expect(
+    page.getByRole("region", { name: "Execution plan" }),
+  ).toBeVisible();
+  await page
+    .getByLabel(
+      "Send chat, recent conversation, configured context and selected run summary to AI",
+    )
+    .check();
+  await command.fill("run regression on dev");
+  await page.getByRole("button", { name: "Send command" }).click();
+  await expect(
+    page.getByRole("region", { name: "AI suggestion" }),
+  ).toBeVisible();
+  await expect(page.getByRole("region",{name:"Execution plan"})).toHaveCount(0);
+  fs.mkdirSync("../docs/screenshots", {recursive:true});
+  await page.setViewportSize({width:1440,height:1400});
+  await page.evaluate(()=>window.scrollTo(0,0));
+  await page.screenshot({path:"../docs/screenshots/ai-proposal-fixture.png"});
+  await page.getByRole("button", { name: "Use proposed context" }).click();
+  await expect(
+    page.getByRole("region", { name: "Execution plan" }),
+  ).toHaveCount(0);
+  await expect(page.getByLabel("Branch", { exact: true })).toHaveValue(
+    "develop",
+  );
+  await expect(page.getByLabel("ENV", { exact: true })).toHaveValue("dev");
+  expect(state.counts().executions).toBe(0);
+});
+
+test("AI cancellation only opens the existing explicit confirmation", async ({
+  page,
+}) => {
+  const state = await fixtures(page, true);
+  await page.route("**/api/assistant", (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ enabled: true, configured: true }),
+    }),
+  );
+  await page.route("**/api/assistant/chat", (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        run_id: id,
+        facts: null,
+        limitations: [],
+        answer: {
+          action: "cancel",
+          message: "Review the stop request.",
+          selection: null,
+          hypotheses: [],
+          bug_report_draft: null,
+        },
+      }),
+    }),
+  );
+  await page.goto("/ui/");
+  await page.getByRole("button", { name: /api/ }).first().click();
+  await page
+    .getByLabel(
+      "Send chat, recent conversation, configured context and selected run summary to AI",
+    )
+    .check();
+  await page
+    .getByRole("textbox", { name: "Structured command" })
+    .fill("stop this run");
+  await page.getByRole("button", { name: "Send command" }).click();
+  await page.getByRole("button", { name: "Review cancellation" }).click();
+  await expect(
+    page.getByRole("button", { name: "Confirm cancellation", exact: true }),
+  ).toBeVisible();
+  expect(state.counts().cancellations).toBe(0);
+});
+
+test("AI provider error leaves commands usable on mobile", async ({ page }) => {
+  await fixtures(page);
+  await page.route("**/api/assistant", (r) =>
+    r.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ enabled: true, configured: true }),
+    }),
+  );
+  await page.route("**/api/assistant/chat", (r) =>
+    r.fulfill({
+      status: 502,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Model unavailable" }),
+    }),
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/ui/");
+  await page
+    .getByLabel(
+      "Send chat, recent conversation, configured context and selected run summary to AI",
+    )
+    .check();
+  await page
+    .getByRole("textbox", { name: "Structured command" })
+    .fill("analyze");
+  await page.getByRole("button", { name: "Send command" }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Model unavailable" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("textbox", { name: "Structured command" }).fill("/help");
+  await page.getByRole("button", { name: "Send command" }).click();
+  await expect(page.getByText(/Available commands:/)).toBeVisible();
 });

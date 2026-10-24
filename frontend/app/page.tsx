@@ -41,6 +41,28 @@ type Context = {
   branch: string;
   parameters: Record<string, string>;
 };
+type AiReply = {
+  run_id: string | null;
+  answer: {
+    action: "clarify" | "propose" | "analyze" | "cancel";
+    message: string;
+    selection: {
+      project_id: string;
+      pipeline_id: string;
+      branch: string;
+      parameters: Record<string, string>;
+    } | null;
+    hypotheses: { text: string; artifact_ids: string[] }[];
+    bug_report_draft: string | null;
+  };
+  facts: {
+    pipeline_status: string;
+    test_status: string;
+    counts: Record<string, number>;
+    attempts_known: boolean;
+  } | null;
+  limitations: string[];
+};
 type Message = { role: "user" | "relay"; text: string };
 const initialMessage: Message = {
   role: "relay",
@@ -84,6 +106,16 @@ function errorText(error: unknown) {
 }
 
 export default function Workspace() {
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [shareAi, setShareAi] = useState(false);
+  const [shareFailures, setShareFailures] = useState(false);
+  const [aiReply, setAiReply] = useState<AiReply | null>(null);
+  const aiLock = useRef(false);
+  useEffect(() => {
+    void api<{ enabled: boolean; configured: boolean }>("/api/assistant")
+      .then((s) => setAiEnabled(s.enabled && s.configured))
+      .catch(() => setAiEnabled(false));
+  }, []);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [context, setContext] = useState<Context>({
     project: "",
@@ -167,7 +199,10 @@ export default function Workspace() {
         storage.set("selected", id);
         setRecoverId("");
         storage.set("attemptedPlan", "");
-      } else if (saved.status === "preview" && saved.expired_unclaimed === true) {
+      } else if (
+        saved.status === "preview" &&
+        saved.expired_unclaimed === true
+      ) {
         setRecoverId("");
         storage.set("attemptedPlan", "");
         setPlan(null);
@@ -281,6 +316,7 @@ export default function Workspace() {
   }, [loadHistory]);
   useEffect(() => {
     activeRun.current = selected;
+    setAiReply(null);
     setRun(null);
     setEvidence(null);
     setRunError("");
@@ -351,6 +387,7 @@ export default function Workspace() {
   function changeContext(next: Context) {
     revision.current++;
     setContext(next);
+    setAiReply(null);
     setPlan(null);
     setError("");
   }
@@ -366,7 +403,14 @@ export default function Workspace() {
     });
   }
   async function preview() {
-    if (!validContext || recoverId || storage.get("attemptedPlan") || previewLock.current || actionLock.current) return;
+    if (
+      !validContext ||
+      recoverId ||
+      storage.get("attemptedPlan") ||
+      previewLock.current ||
+      actionLock.current
+    )
+      return;
     previewLock.current = true;
     setBusy("preview");
     setError("");
@@ -428,7 +472,9 @@ export default function Workspace() {
       } else if (result.status === "rejected") {
         setRecoverId("");
         storage.set("attemptedPlan", "");
-        setError(result.error || "Submission rejected. Preview a new plan to retry.");
+        setError(
+          result.error || "Submission rejected. Preview a new plan to retry.",
+        );
       } else {
         setRecoverId(result.id);
         setError(
@@ -437,7 +483,11 @@ export default function Workspace() {
         );
       }
     } catch (e) {
-      if (e instanceof ApiError && e.status === 409 && ["stale_plan", "expired_plan"].includes(e.code || "")) {
+      if (
+        e instanceof ApiError &&
+        e.status === 409 &&
+        ["stale_plan", "expired_plan"].includes(e.code || "")
+      ) {
         setRecoverId("");
         storage.set("attemptedPlan", "");
         setPlan(null);
@@ -512,6 +562,61 @@ export default function Workspace() {
       setBusy("");
     }
   }
+  async function askAi(text: string) {
+    if (
+      !shareAi ||
+      !aiEnabled ||
+      aiLock.current ||
+      actionLock.current ||
+      previewLock.current
+    ) {
+      addMessage({
+        role: "relay",
+        text: "Enable AI sharing first, or use /preview, /status, or /help.",
+      });
+      return;
+    }
+    aiLock.current = true;
+    actionLock.current = true;
+    setBusy("ai");
+    setError("");
+    setAiReply(null);
+    // A follow-up may change the intended target; never leave an old plan runnable.
+    setPlan(null);
+    const version = revision.current;
+    try {
+      const value = await post<AiReply>("/api/assistant/chat", {
+        message: text,
+        share_context: true,
+        include_failure_details: shareFailures,
+        context: validContext
+          ? {
+              project_id: context.project,
+              pipeline_id: context.pipeline,
+              branch: context.branch,
+              parameters: context.parameters,
+            }
+          : null,
+        run_id: selected || null,
+        history: messages
+          .slice(-8)
+          .map((m) => ({ role: m.role, text: m.text.slice(0, 4000) })),
+      });
+      if (version === revision.current) {
+        setAiReply(value);
+        addMessage({
+          role: "relay",
+          text: `AI suggestion: ${value.answer.message}`,
+        });
+      }
+    } catch (e) {
+      if (version === revision.current) setError(errorText(e));
+    } finally {
+      aiLock.current = false;
+      actionLock.current = false;
+      setBusy("");
+    }
+  }
   function sendCommand(event: React.FormEvent) {
     event.preventDefault();
     const text = command.trim();
@@ -526,7 +631,8 @@ export default function Workspace() {
           role: "relay",
           text: "Choose a run from the sidebar first.",
         });
-    } else
+    } else if (!text.startsWith("/")) void askAi(text);
+    else
       addMessage({
         role: "relay",
         text: "Available commands: /preview for your selected context, /status for the selected run, and /help. Running a pipeline requires the Confirm & run button on its reviewed plan.",
@@ -574,6 +680,7 @@ export default function Workspace() {
             setEvidence(null);
             setPlan(null);
             setMessages([initialMessage]);
+            setAiReply(null);
             setHistoryOpen(false);
           }}
         >
@@ -660,7 +767,7 @@ export default function Workspace() {
             <ThemePicker />
             <span className="mode-label">
               <span />
-              Structured commands
+              {aiEnabled ? "QA assistant" : "Structured commands"}
             </span>
             <button
               aria-label="Toggle execution context"
@@ -682,7 +789,9 @@ export default function Workspace() {
               {context.project || "No project selected"}
             </span>
             <span>{context.branch || "Choose a branch"}</span>
-            <span className="muted-chip">AI not connected</span>
+            <span className="muted-chip">
+              {aiEnabled ? "AI available · opt-in" : "AI not connected"}
+            </span>
           </div>
           {!plan && !selected && messages.length <= 1 && (
             <section className="welcome">
@@ -770,6 +879,115 @@ export default function Workspace() {
                 Check status
               </button>
             </div>
+          )}
+          {aiReply && (
+            <section className="plan-card ai-card" aria-label="AI suggestion">
+              <div className="card-heading">
+                <Sparkles size={18} />
+                <div>
+                  <h2>AI suggestion</h2>
+                  <p>No pipeline was started or stopped by AI.</p>
+                </div>
+              </div>
+              <div className="ai-body">
+                {aiReply.answer.action === "propose" &&
+                  aiReply.answer.selection && (
+                    <>
+                      <p>
+                        Proposed context: {aiReply.answer.selection.project_id}{" "}
+                        / {aiReply.answer.selection.pipeline_id} /{" "}
+                        {aiReply.answer.selection.branch}
+                      </p>
+                      <pre>
+                        {JSON.stringify(
+                          aiReply.answer.selection.parameters,
+                          null,
+                          2,
+                        )}
+                      </pre>
+                      <button
+                        disabled={Boolean(busy) || Boolean(recoverId)}
+                        onClick={() => {
+                          const s = aiReply.answer.selection!;
+                          changeContext({
+                            project: s.project_id,
+                            pipeline: s.pipeline_id,
+                            branch: s.branch,
+                            parameters: s.parameters,
+                          });
+                        }}
+                      >
+                        Use proposed context
+                      </button>
+                      <p>
+                        Then preview the pinned plan and confirm it explicitly.
+                      </p>
+                    </>
+                  )}
+                {aiReply.facts && (
+                  <div>
+                    <h3>Observed report summary</h3>
+                    <p>
+                      Pipeline: {aiReply.facts.pipeline_status} · Tests:{" "}
+                      {aiReply.facts.test_status}
+                    </p>
+                    <p>
+                      {Object.entries(aiReply.facts.counts)
+                        .map(([s, n]) => `${s}: ${n}`)
+                        .join(" · ") || "No tests collected"}
+                    </p>
+                    <p>
+                      Attempt counts:{" "}
+                      {aiReply.facts.attempts_known
+                        ? "reported"
+                        : "unknown or incomplete"}
+                    </p>
+                  </div>
+                )}
+                {aiReply.answer.hypotheses.map((h, i) => (
+                  <div key={i}>
+                    <h3>Hypothesis — unverified</h3>
+                    <p>{h.text}</p>
+                    {h.artifact_ids.map((id) => (
+                      <a
+                        key={id}
+                        href={`/api/remote-runs/${encodeURIComponent(aiReply.run_id!)}/evidence/${encodeURIComponent(id)}`}
+                      >
+                        Evidence {id.slice(0, 10)}{" "}
+                      </a>
+                    ))}
+                  </div>
+                ))}
+                {aiReply.answer.bug_report_draft && (
+                  <details>
+                    <summary>Bug report draft — review before sharing</summary>
+                    <pre>{aiReply.answer.bug_report_draft}</pre>
+                  </details>
+                )}
+                {aiReply.answer.action === "cancel" &&
+                  aiReply.run_id === selected &&
+                  run &&
+                  !run.terminal &&
+                  run.cancel_status === "none" && (
+                    <button
+                      disabled={Boolean(busy)}
+                      onClick={() => {
+                        setCancelConfirm(true);
+                        document
+                          .querySelector('[aria-label="Selected run"]')
+                          ?.scrollIntoView({ behavior: "smooth" });
+                      }}
+                    >
+                      Review cancellation
+                    </button>
+                  )}
+                {aiReply.limitations.map((text, i) => (
+                  <p key={i}>
+                    <small>{text}</small>
+                  </p>
+                ))}
+              </div>
+            </section>
           )}
           {plan && (
             <section className="plan-card" aria-label="Execution plan">
@@ -1134,6 +1352,34 @@ export default function Workspace() {
           )}
         </div>
         <div className="composer-wrap">
+          {aiEnabled && (
+            <div className="ai-sharing">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={shareAi}
+                  disabled={Boolean(busy)}
+                  onChange={(e) => {
+                    setShareAi(e.target.checked);
+                    if (!e.target.checked) setShareFailures(false);
+                  }}
+                />
+                Send chat, recent conversation, configured context and selected
+                run summary to AI
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={shareFailures}
+                  disabled={!shareAi || Boolean(busy)}
+                  onChange={(e) => setShareFailures(e.target.checked)}
+                />
+                Include failure names/messages (best-effort redaction; verify
+                sensitive content first)
+              </label>
+            </div>
+          )}
+
           <form className="composer" onSubmit={sendCommand}>
             <label className="sr-only" htmlFor="command">
               Structured command
@@ -1143,7 +1389,11 @@ export default function Workspace() {
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               maxLength={500}
-              placeholder="Try /preview or /status…"
+              placeholder={
+                aiEnabled && shareAi
+                  ? "Ask about your tests or suggest a check…"
+                  : "Try /preview or /status…"
+              }
             />
             <button
               type="submit"

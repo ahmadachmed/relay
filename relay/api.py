@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from .assistant import Assistant, ChatRequest
 from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest, Contract
@@ -29,6 +30,8 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
     monitor = RunMonitor(execution)
     evidence_store = EvidenceStore(execution, monitor)
+    assistant = Assistant(registry, monitor, evidence_store)
+
 
     @asynccontextmanager
     async def lifespan(app):
@@ -46,6 +49,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     app.state.registry = registry
     app.state.execution = execution
     app.state.monitor = monitor
+    app.state.assistant = assistant
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -98,6 +102,14 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     async def reconcile_plan(plan_id: str, body: Reconciliation):
         return await execution.reconcile(plan_id, str(body.pipeline_uuid),
                                          BitbucketCatalogProvider.from_environment())
+
+    @app.get('/api/assistant')
+    def assistant_status():
+        return {'enabled': os.getenv('RELAY_AI_ENABLED') == '1', 'configured': bool(os.getenv('OPENAI_API_KEY') and os.getenv('RELAY_AI_MODEL'))}
+
+    @app.post('/api/assistant/chat')
+    async def assistant_chat(body: ChatRequest):
+        return await assistant.chat(body)
 
     @app.get('/api/remote-runs')
     def remote_runs(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
