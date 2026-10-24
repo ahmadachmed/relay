@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "projects": {
+    "api": {
+      "repository": "example/api-automation",
+      "default_branch": "main",
+      "allowed_branches": [
+        "main",
+        "develop"
+      ],
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            },
+            "WORKERS": {
+              "kind": "workers",
+              "allowed_values": [
+                "1",
+                "4"
+              ],
+              "default": "1"
+            }
+          }
+        }
+      },
+      "framework": "robot_api",
+      "reports": [
+        {
+          "format": "robot_xml",
+          "path": "output.xml"
+        }
+      ]
+    },
+    "mobile": {
+      "repository": "example/mobile-automation",
+      "default_branch": "master",
+      "allowed_branches": [
+        "master",
+        "develop"
+      ],
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            },
+            "PLATFORM": {
+              "kind": "platform",
+              "allowed_values": [
+                "android",
+                "ios"
+              ]
+            }
+          }
+        }
+      },
+      "framework": "robot_appium",
+      "reports": [
+        {
+          "format": "robot_xml",
+          "path": "output.xml"
+        }
+      ]
+    },
+    "web": {
+      "repository": "example/web-automation",
+      "default_branch": "main",
+      "allowed_branches": [
+        "main",
+        "develop"
+      ],
+      "pipelines": {
+        "smoke": {
+          "selector": "smoke-tests",
+          "parameters": {
+            "ENV": {
+              "kind": "environment",
+              "allowed_values": [
+                "dev",
+                "uat"
+              ],
+              "default": "uat"
+            },
+            "TAGS": {
+              "kind": "test_selector",
+              "allowed_values": [
+                "smoke",
+                "regression"
+              ],
+              "default": "smoke"
+            }
+          }
+        }
+      },
+      "framework": "pytest_playwright",
+      "reports": [
+        {
+          "format": "junit_xml",
+          "path": "results.xml"
+        },
+        {
+          "format": "allure",
+          "path": "allure-results"
+        }
+      ]
+    }
+  }
+}

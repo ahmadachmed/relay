@@ -5,14 +5,19 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from .runner import Runner
+from .registry import load_registry, resolve_plan
+from .contracts import PlanRequest
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def create_app(config=None, data=None):
+def create_app(config=None, data=None, registry_path=None):
     app = FastAPI(title='Relay QA Harness')
+    registry = load_registry(registry_path or os.getenv("RELAY_PROJECTS", ROOT / "projects.example.json"))
     runner = Runner(config or os.getenv('RELAY_CONFIG', ROOT / 'relay.example.json'), data or os.getenv('RELAY_DATA', ROOT / '.relay'))
     app.state.runner = runner
+    app.state.registry = registry
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -31,6 +36,19 @@ def create_app(config=None, data=None):
     @app.get('/api/projects')
     def projects():
         return [{'id': key, 'adapter': p['adapter'], 'enabled': p.get('enabled', False), 'suites': list(p['suites'])} for key, p in runner.config['projects'].items()]
+
+    @app.get('/api/project-registry')
+    def project_registry():
+        return registry.model_dump(mode='json')
+
+    @app.post('/api/plans/validate')
+    def validate_plan(body: PlanRequest):
+        try:
+            return resolve_plan(registry, body).model_dump(mode='json')
+        except ValidationError as exc:
+            raise HTTPException(422, [{'loc': e['loc'], 'msg': e['msg']} for e in exc.errors()])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
 
     @app.get('/api/runs')
     def runs():
