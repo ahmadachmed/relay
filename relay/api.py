@@ -6,7 +6,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from .runner import Runner
 from .registry import load_registry, resolve_plan
-from .contracts import PlanRequest
+from .contracts import PlanRequest, Contract
+from .execution import ExecutionService, PlanError
+from uuid import UUID
+from pydantic import model_validator
 from .providers import ProviderError
 from .providers.bitbucket import BitbucketCatalogProvider
 from pydantic import ValidationError
@@ -20,6 +23,8 @@ def create_app(config=None, data=None, registry_path=None):
     runner = Runner(config or os.getenv('RELAY_CONFIG', ROOT / 'relay.example.json'), data or os.getenv('RELAY_DATA', ROOT / '.relay'))
     app.state.runner = runner
     app.state.registry = registry
+    execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
+    app.state.execution = execution
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -34,6 +39,34 @@ def create_app(config=None, data=None, registry_path=None):
     @app.get('/')
     def index():
         return FileResponse(ROOT / 'web' / 'index.html')
+
+    @app.exception_handler(PlanError)
+    async def plan_error(request, exc):
+        return JSONResponse({'detail': {'code': exc.code, 'message': str(exc)}}, status_code=exc.status)
+
+    @app.exception_handler(ProviderError)
+    async def provider_error(request, exc):
+        return JSONResponse({'detail': {'code': exc.code, 'message': str(exc)}}, status_code=502)
+
+    @app.post('/api/plans/preview')
+    async def preview_plan(body: PlanRequest):
+        try:
+            return await execution.preview(body, BitbucketCatalogProvider.from_environment())
+        except ValueError:
+            raise HTTPException(422, 'Invalid project, branch, pipeline or parameters') from None
+
+    @app.get('/api/plans/{plan_id}')
+    def get_plan(plan_id: str):
+        return execution.get(plan_id)
+
+    @app.post('/api/plans/{plan_id}/execute')
+    async def execute_plan(plan_id: str, body: Confirmation):
+        return await execution.execute(plan_id, BitbucketCatalogProvider.from_environment())
+
+    @app.post('/api/plans/{plan_id}/reconcile')
+    async def reconcile_plan(plan_id: str, body: Reconciliation):
+        return await execution.reconcile(plan_id, str(body.pipeline_uuid),
+                                         BitbucketCatalogProvider.from_environment())
 
     @app.get('/api/projects')
     def projects():
@@ -123,3 +156,25 @@ def create_app(config=None, data=None, registry_path=None):
 
 class Message(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
+
+
+class Confirmation(Contract):
+    confirmed: bool = Field(strict=True)
+
+    @model_validator(mode='after')
+    def must_confirm(self):
+        if not self.confirmed:
+            raise ValueError('Explicit confirmation is required')
+        return self
+
+
+class Reconciliation(Confirmation):
+    # Operator attests that the remote variables match the reviewed preview.
+    pipeline_uuid: UUID = Field(strict=False)
+    verified_parameters: bool = Field(strict=True)
+
+    @model_validator(mode='after')
+    def must_verify_parameters(self):
+        if not self.verified_parameters:
+            raise ValueError('Verify pipeline variables in Bitbucket before reconciliation')
+        return self
