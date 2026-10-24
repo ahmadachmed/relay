@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def create_app(config=None, data=None, registry_path=None):
     app = FastAPI(title='Relay QA Harness')
+    registry = load_registry(registry_path or os.getenv("RELAY_PROJECTS", ROOT / "projects.example.json"))
     runner = Runner(config or os.getenv('RELAY_CONFIG', ROOT / 'relay.example.json'), data or os.getenv('RELAY_DATA', ROOT / '.relay'))
     app.state.runner = runner
-    registry = load_registry(registry_path or os.getenv("RELAY_PROJECTS", ROOT / "projects.example.json"))
     app.state.registry = registry
 
     @app.middleware('http')

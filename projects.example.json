@@ -2,14 +2,12 @@
   "schema_version": 1,
   "projects": {
     "api": {
-      "stack": "robot_api",
       "repository": "example/api-automation",
       "default_branch": "main",
       "allowed_branches": [
         "main",
         "develop"
       ],
-      "report_type": "robot_xml",
       "pipelines": {
         "smoke": {
           "selector": "smoke-tests",
@@ -40,17 +38,22 @@
             }
           }
         }
-      }
+      },
+      "framework": "robot_api",
+      "reports": [
+        {
+          "format": "robot_xml",
+          "path": "output.xml"
+        }
+      ]
     },
     "mobile": {
-      "stack": "robot_appium",
       "repository": "example/mobile-automation",
       "default_branch": "master",
       "allowed_branches": [
         "master",
         "develop"
       ],
-      "report_type": "robot_xml",
       "pipelines": {
         "smoke": {
           "selector": "smoke-tests",
@@ -80,17 +83,22 @@
             }
           }
         }
-      }
+      },
+      "framework": "robot_appium",
+      "reports": [
+        {
+          "format": "robot_xml",
+          "path": "output.xml"
+        }
+      ]
     },
     "web": {
-      "stack": "pytest_playwright",
       "repository": "example/web-automation",
       "default_branch": "main",
       "allowed_branches": [
         "main",
         "develop"
       ],
-      "report_type": "junit_xml",
       "pipelines": {
         "smoke": {
           "selector": "smoke-tests",
@@ -113,7 +121,18 @@
             }
           }
         }
-      }
+      },
+      "framework": "pytest_playwright",
+      "reports": [
+        {
+          "format": "junit_xml",
+          "path": "results.xml"
+        },
+        {
+          "format": "allure",
+          "path": "allure-results"
+        }
+      ]
     }
   }
 }

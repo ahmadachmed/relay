@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Name = Annotated[str, Field(min_length=1, max_length=100, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')]
 Value = Annotated[str, Field(min_length=1, max_length=256)]
+TestIdentity = Annotated[str, Field(min_length=1)]
 
 
 class Contract(BaseModel):
@@ -13,7 +14,7 @@ class Contract(BaseModel):
 
 
 class Parameter(Contract):
-    kind: Literal['environment', 'platform', 'team', 'test_selector', 'workers']
+    kind: Name  # UI metadata; validation is driven by this parameter's configuration.
     allowed_values: list[Value] = Field(min_length=1)
     required: bool = True
     default: Value | None = None
@@ -32,13 +33,24 @@ class Pipeline(Contract):
     parameters: dict[Name, Parameter] = Field(default_factory=dict)
 
 
+class Report(Contract):
+    format: Name  # Parser identifier, independent of framework; unknown formats are allowed.
+    path: Value
+
+    @model_validator(mode='after')
+    def relative_path(self):
+        if self.path.startswith(('/', '\\')) or '\\' in self.path or ':' in self.path or '..' in self.path.split('/'):
+            raise ValueError('report path must be relative without parent traversal')
+        return self
+
+
 class Project(Contract):
-    provider: Literal['bitbucket'] = 'bitbucket'
-    stack: Literal['robot_api', 'robot_appium', 'pytest_playwright']
+    provider: Name = 'bitbucket'  # Provider availability is checked by the execution layer.
+    framework: Value | None = None  # Informational only.
     repository: Annotated[str, Field(pattern=r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
     default_branch: Value
     allowed_branches: list[Value] = Field(min_length=1)
-    report_type: Literal['robot_xml', 'junit_xml']
+    reports: list[Report] = Field(default_factory=list)
     enabled: bool = True
     pipelines: dict[Name, Pipeline] = Field(min_length=1)
 
@@ -46,19 +58,9 @@ class Project(Contract):
     def coherent(self):
         if self.default_branch not in self.allowed_branches:
             raise ValueError('default_branch must be in allowed_branches')
-        expected = 'junit_xml' if self.stack == 'pytest_playwright' else 'robot_xml'
-        if self.report_type != expected:
-            raise ValueError(f'{self.stack} requires {expected}')
         selectors = [p.selector for p in self.pipelines.values()]
         if len(set(selectors)) != len(selectors):
             raise ValueError('pipeline selectors must be unique within a project')
-        if self.stack == 'robot_appium':
-            for pipeline in self.pipelines.values():
-                platforms = [p for p in pipeline.parameters.values() if p.kind == 'platform']
-                if len(platforms) != 1 or not platforms[0].required:
-                    raise ValueError('mobile pipeline requires exactly one required platform parameter')
-                if not set(platforms[0].allowed_values) <= {'android', 'ios'}:
-                    raise ValueError('mobile platform values must be android or ios')
         return self
 
 
@@ -113,14 +115,15 @@ TestStatus = Literal['pass', 'fail', 'skip', 'error', 'flaky', 'unknown']
 class Artifact(Contract):
     id: Name
     name: Value
-    kind: Literal['robot_xml', 'junit_xml', 'log', 'html', 'allure', 'screenshot', 'trace', 'video']
+    kind: Name
+    parse_status: Literal['not_attempted', 'parsed', 'unsupported', 'failed'] = 'not_attempted'
     availability: Literal['pending', 'available', 'missing', 'expired'] = 'pending'
     storage_key: Value | None = None  # Opaque storage reference, not a signed URL.
 
 
 class TestResult(Contract):
-    id: Value
-    name: Value
+    id: TestIdentity
+    name: TestIdentity
     status: TestStatus
     message: str = ''
     artifact_ids: list[Name] = Field(default_factory=list)
