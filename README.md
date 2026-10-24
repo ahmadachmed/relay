@@ -2,7 +2,7 @@
 
 A chat-first QA harness for existing automation projects: Robot API, mobile automation, and Playwright web.
 
-This initial foundation runs real local suites and normalizes their evidence. The chat currently accepts explicit commands; it does **not** use an AI model. The bundled Robot suite is a local example, not a real API integration.
+This initial foundation runs real local suites and normalizes their evidence. Structured commands work without AI; the remote workspace also offers an optional, explicitly enabled AI assistant. The bundled Robot suite is a local example, not a real API integration.
 
 ## Start
 
@@ -76,3 +76,7 @@ Report upload and evidence parsing: [evidence API](docs/evidence.md).
 ## Chat-first remote workspace
 
 Build the Next.js frontend and serve it from the Python backend: see [workspace UI setup and testing](docs/workspace-ui.md). It provides registry-based preview, confirmed execution, progress, cancellation, and manual evidence upload.
+
+## Optional AI conversation
+
+See [assistant setup, sharing controls and limits](docs/assistant.md). AI proposes configured context and analyzes evidence; execution and cancellation retain explicit UI confirmation. Disabled by default.
