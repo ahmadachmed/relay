@@ -74,3 +74,19 @@ def test_inconsistent_junit_cannot_claim_pass(tmp_path, counter):
     assert store.summary(run_id)['test_status'] == 'incomplete'
     assert store.summary(run_id)['tests'] == []
     assert store.download(run_id, artifact['id']) == body
+
+
+def test_pytest_setup_and_teardown_errors_are_failed_evidence(tmp_path):
+    app = create_app(ROOT / 'relay.example.json', tmp_path, monitoring=False)
+    app.state.registry.projects['api'].reports[0].format = 'junit_xml'
+    run_id = submitted(app.state.execution)['id']
+    store = EvidenceStore(app.state.execution, app.state.monitor)
+    body = b'<testsuites><testsuite tests="1" errors="2"><testcase name="example"><error message="failed on setup">setup error</error><error message="failed on teardown">teardown error</error></testcase></testsuite></testsuites>'
+    artifact = store.upload(run_id, 'output.xml', body)
+    result = store.summary(run_id)
+    assert artifact['parse_status'] == 'parsed'
+    assert result['test_status'] == 'failed'
+    assert result['tests'][0]['status'] == 'error'
+    assert result['tests'][0]['artifact_ids'] == [artifact['id']]
+    assert all(message in result['tests'][0]['message'] for message in ['setup error', 'teardown error'])
+    assert store.download(run_id, artifact['id']) == body

@@ -48,3 +48,26 @@ def test_nested_junit_totals_and_optional_counters():
 def test_nested_junit_mismatches_are_rejected(body):
     with pytest.raises(ValueError, match='counters'):
         parse_report(body, 'junit_xml', 'a')
+
+
+def test_junit_multiple_error_nodes_preserve_all_messages():
+    body = b'<testsuite tests="1" errors="2" failures="0"><testcase name="example"><error message="setup">setup details</error><error message="teardown">teardown details</error></testcase></testsuite>'
+    result = parse_report(body, 'junit_xml', 'a')
+    assert len(result) == 1
+    assert result[0]['status'] == 'error'
+    assert 'setup details' in result[0]['message']
+    assert 'teardown details' in result[0]['message']
+    assert result[0]['attempts'] is None
+
+
+def test_junit_multiple_failures_and_mixed_outcomes():
+    body = b'<testsuite tests="1" errors="1" failures="2"><testcase name="example"><failure message="first"/><failure message="second"/><error message="cleanup"/></testcase></testsuite>'
+    result = parse_report(body, 'junit_xml', 'a')
+    assert result[0]['status'] == 'error'
+    assert all(message in result[0]['message'] for message in ['first', 'second', 'cleanup'])
+
+
+def test_multiple_errors_still_reject_incorrect_counters():
+    body = b'<testsuite tests="1" errors="1"><testcase name="example"><error/><error/></testcase></testsuite>'
+    with pytest.raises(ValueError, match='counters'):
+        parse_report(body, 'junit_xml', 'a')

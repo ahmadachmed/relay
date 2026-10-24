@@ -56,16 +56,18 @@ def parse_report(body, format, artifact_id):
             counts = dict(tests=0, failures=0, errors=0, skipped=0)
             for i, test in enumerate(suite.findall('testcase')):
                 name = ' / '.join(names + [test.get('classname', ''), test.get('name', '')])
-                status, message = 'pass', ''
-                for tag, outcome in [('skipped', 'skip'), ('failure', 'fail'), ('error', 'error')]:
-                    child = test.find(tag)
-                    if child is not None:
-                        status, message = outcome, child.get('message', '') + '\n' + (child.text or '')
+                status, messages = 'pass', []
+                for tag, outcome, counter in [('skipped', 'skip', 'skipped'),
+                        ('failure', 'fail', 'failures'), ('error', 'error', 'errors')]:
+                    children = test.findall(tag)
+                    counts[counter] += len(children)
+                    if children:
+                        status = outcome
+                    for child in children:
+                        messages.append(child.get('message', '') + '\n' + (child.text or ''))
+                message = '\n'.join(messages)
                 add(name + ':' + str(i), name, status, message)
                 counts['tests'] += 1
-                counter = {'fail': 'failures', 'error': 'errors', 'skip': 'skipped'}.get(status)
-                if counter:
-                    counts[counter] += 1
             for i, error in enumerate(suite.findall('error')):
                 name = ' / '.join(names) + ' [suite error]'
                 add(name + str(i), name, 'error', error.get('message', '') + (error.text or ''))
