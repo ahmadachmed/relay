@@ -1,8 +1,9 @@
-"""Read-only Bitbucket Cloud catalog over REST; credentials stay in the backend."""
+"""Bitbucket Cloud catalog and confirmed trigger; credentials stay in the backend."""
 import asyncio
 import json
 import os
 import re
+from uuid import UUID
 from urllib.parse import quote
 
 import httpx
@@ -110,3 +111,71 @@ class BitbucketCatalogProvider:
             pipelines=[dict(id=key, selector=p.selector, available=p.selector in custom,
                 parameters={name: spec.model_dump() for name, spec in p.parameters.items()})
                 for key, p in project.pipelines.items()])
+
+
+    async def trigger(self, record):
+        """One POST only. Any uncertain result must be reconciled, never retried."""
+        plan = record['plan']
+        workspace, repo = plan['project']['repository'].split('/')
+        base = f'{API}/{quote(workspace, safe="")}/{quote(repo, safe="")}'
+        payload = {
+            'target': {'type': 'pipeline_ref_target', 'ref_type': 'branch',
+                       'ref_name': plan['branch'],
+                       'commit': {'type': 'commit', 'hash': record['commit']},
+                       'selector': {'type': 'custom', 'pattern': record['selector']}},
+            'variables': [{'key': k, 'value': v, 'secured': False}
+                          for k, v in plan['parameters'].items()],
+        }
+        try:
+            async with asyncio.timeout(TIMEOUT):
+                async with httpx.AsyncClient(auth=self.auth, timeout=TIMEOUT,
+                        follow_redirects=False, transport=self.transport) as client:
+                    async with client.stream('POST', f'{base}/pipelines/', json=payload) as response:
+                        if response.status_code in (400, 401, 403, 404, 422, 429):
+                            raise ProviderError('trigger_rejected',
+                                f'Bitbucket rejected trigger (HTTP {response.status_code}); review access and plan.')
+                        if response.status_code != 201:
+                            raise ValueError()
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            if len(body) + len(chunk) > MAX_BYTES:
+                                raise ValueError()
+                            body.extend(chunk)
+            result = json.loads(body)
+            uuid = '{' + str(UUID(result['uuid'])) + '}'
+            number = result['build_number']
+            if type(number) is not int or number < 1:
+                raise ValueError()
+            return {'uuid': uuid, 'url': f'https://bitbucket.org/{workspace}/{repo}/pipelines/results/{number}'}
+        except ProviderError:
+            raise
+        except (TimeoutError, httpx.RequestError, ValueError, KeyError, TypeError, AttributeError):
+            raise ProviderError('trigger_unknown',
+                'Trigger outcome unknown; inspect Bitbucket. This plan will not submit again.') from None
+
+
+    async def reconcile(self, record, pipeline_uuid):
+        """Read a manually identified pipeline; never submit a replacement."""
+        workspace, repo = record['plan']['project']['repository'].split('/')
+        uuid = '{' + str(UUID(pipeline_uuid)) + '}'
+        base = f'{API}/{quote(workspace, safe="")}/{quote(repo, safe="")}'
+        try:
+            async with asyncio.timeout(TIMEOUT):
+                async with httpx.AsyncClient(auth=self.auth, timeout=TIMEOUT,
+                        follow_redirects=False, transport=self.transport) as client:
+                    result = await self._read(client, f'{base}/pipelines/{quote(uuid, safe="")}', 'pipeline')
+            target = result['target']
+            if (str(UUID(result['uuid'])) != str(UUID(uuid))
+                    or target['ref_name'] != record['plan']['branch']
+                    or target['ref_type'] != 'branch'
+                    or target['commit']['hash'] != record['commit']
+                    or target['selector'] != {'type': 'custom', 'pattern': record['selector']}
+                    or type(result['build_number']) is not int or result['build_number'] < 1):
+                raise ValueError()
+            return {'uuid': uuid,
+                    'url': f"https://bitbucket.org/{workspace}/{repo}/pipelines/results/{result['build_number']}"}
+        except ProviderError:
+            raise
+        except (TimeoutError, httpx.RequestError, ValueError, KeyError, TypeError, AttributeError):
+            raise ProviderError('reconciliation_failed',
+                'Could not verify the pipeline identity and target; plan remains unchanged.') from None

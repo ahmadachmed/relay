@@ -69,8 +69,9 @@ Errors expose sanitized stages/codes rather than upstream bodies or credentials:
 Other unsuccessful statuses (including redirects) become `upstream_error`.
 Malformed pipeline data fails without reporting a successful connection.
 
-This implements catalog reads only. Trigger, status, cancellation, and artifacts
-remain separate execution-provider work. Do not expose the local backend publicly;
+The catalog endpoint remains read-only. Confirmed trigger and manual reconciliation
+are documented in [execution.md](execution.md). Remote status, cancellation, and
+artifacts remain subsequent work. Do not expose the local backend publicly;
 it has no multi-user authentication. Credentials stay in the backend environment.
 
 References:
