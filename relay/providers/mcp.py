@@ -19,6 +19,8 @@ class Binding(Contract):
     arguments: dict = Field(default_factory=dict)
     result_path: str = ''
     cursor_path: str | None = None
+    missing_cursor_is_end: bool = False
+    omit_initial_cursor: bool = True
 
 
 class MCPConfig(Contract):
@@ -47,7 +49,7 @@ def select(value, path):
     return value
 
 
-def render(value, context):
+def render(value, context, omit_initial_cursor=False):
     if isinstance(value, str):
         if value.startswith('$'):
             if value[1:] not in context:
@@ -55,9 +57,10 @@ def render(value, context):
             return context[value[1:]]
         return value
     if isinstance(value, dict):
-        return {k:render(v,context) for k,v in value.items()}
+        return {k:render(v,context,omit_initial_cursor) for k,v in value.items()
+                if not (omit_initial_cursor and v == "$cursor" and context.get("cursor") is None)}
     if isinstance(value, list):
-        return [render(v,context) for v in value]
+        return [render(v,context,omit_initial_cursor) for v in value]
     return value
 
 
@@ -117,6 +120,20 @@ class MCPCatalogProvider:
             raise
         except TimeoutError:
             raise ProviderError('timeout', 'MCP catalog request timed out.') from None
+        except ExceptionGroup as exc:
+            def leaves(group):
+                for error in group.exceptions:
+                    if isinstance(error, BaseExceptionGroup):
+                        yield from leaves(error)
+                    else:
+                        yield error
+            errors = list(leaves(exc))
+            known = next((e for e in errors if isinstance(e, ProviderError)), None)
+            if known is not None:
+                raise ProviderError(known.code, str(known)) from None
+            if any(isinstance(e, TimeoutError) for e in errors):
+                raise ProviderError('timeout', 'MCP catalog request timed out.') from None
+            raise ProviderError('connection_failed', 'MCP connection failed; check URL, authentication and network access.') from None
         except Exception:
             # SDK task groups may wrap HTTP/auth/transport exceptions; never expose their raw text.
             raise ProviderError('connection_failed', 'MCP connection failed; check URL, authentication and network access.') from None
@@ -138,7 +155,7 @@ class MCPCatalogProvider:
         workspace,repo = project.repository.split('/')
         context = dict(workspace=workspace,repo=repo,repository=project.repository,branch=project.default_branch,cursor=None)
         async def call(binding):
-            arguments = render(binding.arguments,context)
+            arguments = render(binding.arguments,context,binding.omit_initial_cursor)
             from jsonschema import validate, ValidationError, SchemaError
             try: validate(arguments,tools[binding.tool].inputSchema)
             except (ValidationError,SchemaError):
@@ -154,7 +171,12 @@ class MCPCatalogProvider:
             if not isinstance(names,list) or any(not isinstance(n,dict) or not isinstance(n.get('name'),str) for n in names):
                 raise ProviderError('invalid_response','Branch tool must return objects containing name.')
             branches.extend(n['name'] for n in names)
-            cursor=select(data,self.config.branches.cursor_path) if self.config.branches.cursor_path else None
+            try:
+                cursor=select(data,self.config.branches.cursor_path) if self.config.branches.cursor_path else None
+            except ProviderError:
+                if not self.config.branches.missing_cursor_is_end:
+                    raise
+                cursor=None
             if cursor is None or cursor == '': break
             if not isinstance(cursor,(str,int)) or str(cursor) in seen:
                 raise ProviderError('pagination_limit','Invalid or repeated branch cursor.')

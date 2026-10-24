@@ -29,7 +29,7 @@ class Session:
         self.calls.append((name,arguments))
         if name=='repo': data={'data':{'name':'api'}}
         elif name=='branches':
-            data={'values':[{'name':'main' if arguments['cursor'] is None else 'develop'}], 'next':'page2' if arguments['cursor'] is None else None}
+            data={'values':[{'name':'main' if arguments.get('cursor') is None else 'develop'}], 'next':'page2' if arguments.get('cursor') is None else None}
         else: data={'content':'pipelines:\n  custom:\n    smoke-tests:\n      - step:\n          script: ["SECRET"]\n'}
         return CallToolResult(content=[],structuredContent=data)
 
@@ -165,3 +165,50 @@ def test_real_sdk_streamable_http_handshake(monkeypatch):
         assert result['connected'] and result['pipelines'][0]['available']
     finally:
         server.should_exit=True;thread.join(timeout=5);sock.close()
+
+
+def test_optional_string_cursor_omitted_initially():
+    class OptionalCursor(Session):
+        async def list_tools(self,cursor=None):
+            result=await super().list_tools(cursor)
+            for tool in result.tools:
+                if tool.name=='branches':
+                    tool.inputSchema={'type':'object','properties':{'cursor':{'type':'string'}}}
+            return result
+    s=OptionalCursor()
+    asyncio.run(provider(s).catalog(project()))
+    assert ('branches',{}) in s.calls
+    assert ('branches',{'cursor':'page2'}) in s.calls
+
+
+@pytest.mark.parametrize('allow_missing',[True,False])
+def test_terminal_cursor_policy(allow_missing):
+    class MissingNext(Session):
+        async def call_tool(self,name,arguments):
+            if name=='branches':
+                return CallToolResult(content=[],structuredContent={'values':[{'name':'main'}]})
+            return await super().call_tool(name,arguments)
+    c=config();c.branches.missing_cursor_is_end=allow_missing
+    if allow_missing:
+        assert asyncio.run(provider(MissingNext(),c).catalog(project()))['connected']
+    else:
+        with pytest.raises(ProviderError,match='field is missing'):
+            asyncio.run(provider(MissingNext(),c).catalog(project()))
+
+
+@pytest.mark.parametrize('error,code',[(ProviderError('tool_missing','Configured tool missing.'),'tool_missing'),(TimeoutError('secret'),'timeout'),(RuntimeError('secret'),'connection_failed')])
+def test_nested_exception_groups(error,code):
+    @asynccontextmanager
+    async def grouped(c,h):
+        raise ExceptionGroup('secret wrapper',[ExceptionGroup('nested',[error])])
+        yield
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(MCPCatalogProvider(config(),{},grouped).catalog(project()))
+    assert caught.value.code==code
+    assert 'secret' not in str(caught.value)
+
+
+def test_initial_null_can_be_enabled():
+    c=config();c.branches.omit_initial_cursor=False;s=Session()
+    asyncio.run(provider(s,c).catalog(project()))
+    assert ('branches',{'cursor':None}) in s.calls
