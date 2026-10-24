@@ -170,7 +170,7 @@ class Confirmation(Contract):
 
 class Reconciliation(Confirmation):
     # Operator attests that the remote variables match the reviewed preview.
-    pipeline_uuid: UUID
+    pipeline_uuid: UUID = Field(strict=False)
     verified_parameters: bool = Field(strict=True)
 
     @model_validator(mode='after')

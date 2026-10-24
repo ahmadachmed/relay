@@ -202,3 +202,51 @@ def test_reconciliation_requires_operator_attestation(tmp_path, monkeypatch):
                         {'confirmed': True, 'pipeline_uuid': UUID, 'verified_parameters': False},
                         {'confirmed': True, 'pipeline_uuid': 'bad', 'verified_parameters': True}]:
             assert client.post('/api/plans/missing/reconcile', json=payload).status_code == 422
+
+
+@pytest.mark.parametrize('pipeline_uuid', [UUID, UUID.strip('{}').upper()])
+def test_reconciliation_http_accepts_uuid_string_and_persists_result(tmp_path, monkeypatch, pipeline_uuid):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.method == 'GET'
+        assert request.url.path.endswith('/pipelines/' + UUID)
+        return httpx.Response(200, json={'uuid': UUID, 'build_number': 8, 'target': {
+            'ref_name': 'main', 'ref_type': 'branch', 'commit': {'hash': COMMIT},
+            'selector': {'type': 'custom', 'pattern': 'smoke-tests'}}})
+
+    provider = BitbucketCatalogProvider('email', 'TOKEN', httpx.MockTransport(handler))
+    monkeypatch.setattr(BitbucketCatalogProvider, 'from_environment', classmethod(lambda cls: provider))
+    app = create_app(ROOT / 'relay.example.json', tmp_path)
+    s = app.state.execution
+    record = preview(s)
+    record, _ = s.claim(record['id'])
+    record['attempted_at'] = 0
+    s.save(record)
+    with TestClient(app) as client:
+        response = client.post(f"/api/plans/{record['id']}/reconcile", json={
+            'confirmed': True, 'verified_parameters': True, 'pipeline_uuid': pipeline_uuid})
+        assert response.status_code == 200, response.text
+        assert response.json()['status'] == 'submitted'
+        assert response.json()['reconciled'] is True
+        assert response.json()['pipeline']['uuid'] == UUID
+        assert client.get(f"/api/plans/{record['id']}").json() == response.json()
+        assert client.post(f"/api/plans/{record['id']}/execute", json={
+            'confirmed': True}).json() == response.json()
+    assert len(calls) == 1
+    assert service(tmp_path).get(record['id']) == response.json()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('pipeline_uuid', 'invalid'), ('pipeline_uuid', 123), ('pipeline_uuid', None),
+    ('confirmed', False), ('confirmed', 'true'), ('confirmed', 1),
+    ('verified_parameters', False), ('verified_parameters', 'true'), ('verified_parameters', 1),
+])
+def test_reconciliation_http_rejects_invalid_uuid_and_non_boolean_attestation(tmp_path, monkeypatch, field, value):
+    def unexpected_provider(cls):
+        pytest.fail('Invalid payload must not reach the provider')
+    monkeypatch.setattr(BitbucketCatalogProvider, 'from_environment', classmethod(unexpected_provider))
+    payload = {'pipeline_uuid': UUID, 'confirmed': True, 'verified_parameters': True, field: value}
+    with TestClient(create_app(ROOT / 'relay.example.json', tmp_path)) as client:
+        assert client.post('/api/plans/missing/reconcile', json=payload).status_code == 422
