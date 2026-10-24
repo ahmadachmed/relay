@@ -81,6 +81,17 @@ def decode(result):
     return value
 
 
+def http_error(error):
+    """Map status only; never expose headers, URLs or upstream response bodies."""
+    messages = {
+        401: ('unauthorized', 'MCP authentication failed; check credential expiry.'),
+        403: ('forbidden', 'MCP server denied access; check account permissions.'),
+        429: ('rate_limited', 'MCP rate limit reached; wait before retrying.'),
+    }
+    return ProviderError(*messages.get(error.response.status_code,
+        ('upstream_error', 'MCP server could not complete the request.')))
+
+
 @asynccontextmanager
 async def connect(config, headers):
     # No credential forwarding across redirects, including transport-created clients.
@@ -120,6 +131,8 @@ class MCPCatalogProvider:
             raise
         except TimeoutError:
             raise ProviderError('timeout', 'MCP catalog request timed out.') from None
+        except httpx.HTTPStatusError as exc:
+            raise http_error(exc) from None
         except ExceptionGroup as exc:
             def leaves(group):
                 for error in group.exceptions:
@@ -131,6 +144,9 @@ class MCPCatalogProvider:
             known = next((e for e in errors if isinstance(e, ProviderError)), None)
             if known is not None:
                 raise ProviderError(known.code, str(known)) from None
+            status_error = next((e for e in errors if isinstance(e, httpx.HTTPStatusError)), None)
+            if status_error is not None:
+                raise http_error(status_error) from None
             if any(isinstance(e, TimeoutError) for e in errors):
                 raise ProviderError('timeout', 'MCP catalog request timed out.') from None
             raise ProviderError('connection_failed', 'MCP connection failed; check URL, authentication and network access.') from None

@@ -28,3 +28,5 @@ Contract tests cover discovery, pagination, schema mismatch, text/structured res
 SDK reference: https://github.com/modelcontextprotocol/python-sdk
 
 Nested SDK ExceptionGroup errors preserve known ProviderError codes and timeout classification; unknown exception messages remain sanitized.
+
+HTTP failures, including those nested inside SDK task groups, retain sanitized diagnostic codes: 401 → `unauthorized`, 403 → `forbidden`, 429 → `rate_limited`, other unsuccessful HTTP statuses → `upstream_error`. Relay returns these codes under `detail.code` (502 for upstream auth/access errors, 503 for rate limits). Remote URLs, headers and response bodies are never included. No automatic retry is performed.

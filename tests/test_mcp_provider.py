@@ -212,3 +212,35 @@ def test_initial_null_can_be_enabled():
     c=config();c.branches.omit_initial_cursor=False;s=Session()
     asyncio.run(provider(s,c).catalog(project()))
     assert ('branches',{'cursor':None}) in s.calls
+
+
+@pytest.mark.parametrize('status,code',[(401,'unauthorized'),(403,'forbidden'),(429,'rate_limited'),(500,'upstream_error')])
+@pytest.mark.parametrize('grouped',[False,True])
+def test_http_errors_are_classified_without_leaking(status,code,grouped):
+    import httpx
+    @asynccontextmanager
+    async def failed(c,h):
+        request=httpx.Request('POST','https://mcp.example.com/mcp',headers={'Authorization':'Bearer secret'})
+        response=httpx.Response(status,request=request,text='sensitive upstream body')
+        error=httpx.HTTPStatusError('secret exception text',request=request,response=response)
+        if grouped:
+            raise ExceptionGroup('secret wrapper',[ExceptionGroup('inner',[error])])
+        raise error
+        yield
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(MCPCatalogProvider(config(),{},failed).catalog(project()))
+    assert caught.value.code==code
+    assert 'secret' not in str(caught.value)
+    assert 'sensitive' not in str(caught.value)
+
+
+@pytest.mark.parametrize('code,http_status',[('unauthorized',502),('forbidden',502),('rate_limited',503)])
+def test_api_preserves_provider_error_codes(tmp_path,monkeypatch,code,http_status):
+    class FailedProvider:
+        async def catalog(self,project):
+            raise ProviderError(code,'Sanitized diagnostic')
+    monkeypatch.setattr(MCPCatalogProvider,'from_environment',classmethod(lambda cls:FailedProvider()))
+    with TestClient(create_app(ROOT/'relay.example.json',tmp_path,ROOT/'projects.example.json')) as client:
+        response=client.get('/api/project-registry/api/catalog')
+    assert response.status_code==http_status
+    assert response.json()['detail']=={'code':code,'message':'Sanitized diagnostic'}
