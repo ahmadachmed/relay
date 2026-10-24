@@ -36,11 +36,20 @@ class Pipeline(Contract):
 class Report(Contract):
     format: Name  # Parser identifier, independent of framework; unknown formats are allowed.
     path: Value
+    download_name: Value | None = None
 
     @model_validator(mode='after')
     def relative_path(self):
         if self.path.startswith(('/', '\\')) or '\\' in self.path or ':' in self.path or '..' in self.path.split('/'):
             raise ValueError('report path must be relative without parent traversal')
+        if self.download_name is not None:
+            import re
+            # Downloads are repository-wide: namespace by pipeline UUID, never a shared latest.xml.
+            template = self.download_name
+            rendered = template.replace('{pipeline_uuid}', 'a' * 32).replace('{commit}', 'b' * 40)
+            if ('{pipeline_uuid}' not in template or len(rendered) > 240
+                    or not re.fullmatch(r'[A-Za-z0-9_.-]+', rendered)):
+                raise ValueError('download_name must be a flat filename containing {pipeline_uuid}')
         return self
 
 

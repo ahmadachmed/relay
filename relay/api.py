@@ -12,6 +12,7 @@ from .contracts import PlanRequest, Contract
 from .execution import ExecutionService, PlanError
 from .monitoring import RunMonitor
 from .evidence import EvidenceStore
+from .collection import EvidenceCollector
 from .report_evidence import MAX_REPORT_BYTES
 from uuid import UUID
 from pydantic import model_validator
@@ -28,13 +29,18 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
     monitor = RunMonitor(execution)
     evidence_store = EvidenceStore(execution, monitor)
+    collector = EvidenceCollector(evidence_store)
 
     @asynccontextmanager
     async def lifespan(app):
         task = asyncio.create_task(monitor.run()) if monitoring else None
+        retention = asyncio.create_task(collector.maintenance())
         try:
             yield
         finally:
+            retention.cancel()
+            with suppress(asyncio.CancelledError):
+                await retention
             if task:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -45,6 +51,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     app.state.registry = registry
     app.state.execution = execution
     app.state.monitor = monitor
+    app.state.collector = collector
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -103,6 +110,14 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     @app.post('/api/remote-runs/{run_id}/cancel')
     async def cancel_remote_run(run_id: str, body: Confirmation):
         return await monitor.cancel(run_id)
+
+    @app.post('/api/remote-runs/{run_id}/evidence/collect')
+    async def collect_remote_evidence(run_id: str):
+        return await collector.collect(run_id)
+
+    @app.get('/api/remote-runs/{run_id}/evidence/collection')
+    def evidence_collection_status(run_id: str):
+        return collector.get(run_id)
 
     @app.get('/api/remote-runs/{run_id}/evidence')
     def remote_evidence(run_id: str):

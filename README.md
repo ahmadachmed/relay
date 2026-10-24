@@ -72,3 +72,5 @@ Confirmed remote preview/trigger and recovery: [execution API](docs/execution.md
 Remote run history, polling and cancel: [monitoring API](docs/monitoring.md).
 
 Report upload and evidence parsing: [evidence API](docs/evidence.md).
+
+Optional repository Downloads collection and retention: [collection API](docs/collection.md).
