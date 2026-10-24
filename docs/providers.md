@@ -1,17 +1,28 @@
-# Execution providers and connections
+# MCP execution-provider connection
 
-A provider identifies the system that runs automation; its transport is an implementation detail. `CatalogProvider` supplies the read-only discovery contract in this increment. Bitbucket Cloud is the first implementation, using REST. A future MCP client can implement the same catalog contract, but the ChatGPT MCP connection is not available to the Relay backend automatically. Trigger, monitoring, cancellation and artifact operations belong to issues #3–#5.
+Relay connects directly to a remote MCP server through the official Python MCP SDK (v1 API, pinned below v2), using Streamable HTTP. The backend initializes a session, paginates `tools/list`, validates configured arguments against advertised schemas, and calls only explicitly configured tools. There are no direct Bitbucket REST requests. The initial provider still understands Bitbucket custom pipeline YAML; other source/CI formats need another catalog adapter.
 
-## Configure Bitbucket Cloud
+## Setup
 
-Create a scoped Bitbucket API token with repository read permission (`read:repository:bitbucket`) and access to the selected repository. The backend uses Basic authentication with the Atlassian account email and API token. Set `RELAY_BITBUCKET_EMAIL` and `RELAY_BITBUCKET_API_TOKEN` in the process environment or your secret manager. Never put them in the project registry or commit them. Reference: https://support.atlassian.com/bitbucket-cloud/docs/using-api-tokens/
+1. Copy `mcp.example.json` to ignored `mcp.local.json`.
+2. Set your server URL. HTTPS is required except for localhost. The example tool names are placeholders, not verified Workbench or Atlassian names.
+3. Map the three read operations to actual server tool names and arguments: repository lookup, branch listing, file reading. For gateway tools, nested arguments are supported. Only map operations you have verified are read-only: tool annotations alone are not an authorization boundary.
+4. Map response fields with dotted `result_path` and optional `cursor_path`. Repository must yield a nonempty object, branches a list of objects with `name`, file read a string containing YAML. Cursor must be null/empty on the final page. If the server omits its terminal cursor, adapt the server response or binding before use. Omit `cursor_path` only for a tool that returns all branches in one response; the adapter cannot infer unreported truncation.
+5. Set `RELAY_MCP_CONFIG=mcp.local.json` in the backend environment. Set each secret environment variable referenced by `header_env`, such as `RELAY_WORKBENCH_API_KEY`. Literal secrets do not belong in this file. For bearer auth, map `Authorization` to an environment variable containing the complete `Bearer ...` value.
+6. Configure the project's repository, branches, pipeline selectors and parameters in `projects.local.json`, set `RELAY_PROJECTS`, then request `GET /api/project-registry/{project_id}/catalog`.
 
-Copy `projects.example.json` to `projects.local.json`, set the repository, allowed branches and custom pipeline selectors, and launch with `RELAY_PROJECTS=projects.local.json`. Request `GET /api/project-registry/{project_id}/catalog` to refresh. Each request checks access, follows branch pagination, and reads `bitbucket-pipelines.yml` at the configured default branch.
+Available argument placeholders are `$workspace`, `$repo`, `$repository`, `$branch`, `$cursor`. Only whole-string placeholders are substituted; nested dictionaries/lists are supported. Responses use MCP structuredContent, falling back to a single JSON text content block. Set result paths to match your server's actual response envelope.
 
-Only configured pipelines and parameter definitions are returned. `available=false` means a configured selector is missing from the remote YAML. Remote variable defaults and scripts are never returned. Parameters are currently curated in the validated local registry, not automatically imported. YAML is parsed as data with SafeLoader and a 2 MB response limit. Catalog describes the default branch only; execution must verify the selected branch again before triggering.
+## Authentication and support boundaries
 
-Missing credentials, denied access, missing resources, network failures and rate limits produce stable error codes and sanitized messages. No automatic retry is performed; refresh after correcting the problem or waiting for rate limits. Pagination is capped at 50 pages and restricted to the repository's branch endpoint. Redirects are rejected to prevent credentials being forwarded elsewhere.
+Custom headers/API keys and externally supplied bearer credentials are supported. Interactive OAuth login, token refresh, stdio and legacy SSE transports are not implemented. Do not assume the Atlassian OAuth server works until that flow is added or an appropriate supported credential is configured. ChatGPT's MCP connection cannot be reused as Relay's authentication.
 
-## Validation boundary
+A fresh session is initialized and closed per refresh with an overall timeout. Redirects are disabled. Tools/branch pagination is bounded; returned tool data is capped at 2 MB after SDK decoding (this is not a wire-level memory limit). Errors are sanitized rather than exposing remote messages or credentials. Tool names/schemas must be checked at the configured server; arbitrary tools advertised by the server are never automatically invoked.
 
-Contract tests use mocked HTTP responses. Live authentication and a real sandbox catalog must still be validated by running Relay with backend credentials. ChatGPT's connected Atlassian account is not proof that Relay's independent connection works. No pipeline is triggered by catalog refresh. Other provider identifiers are accepted by the registry but the endpoint returns 501 until their implementations are installed. The existing local-only server restrictions still apply.
+Only curated project parameter definitions and configured pipeline availability are returned, never source scripts or remote variable defaults. No pipeline is triggered. Catalog is checked on the default branch; execution must revalidate the chosen branch in #3. Unsupported parsers/providers remain future work.
+
+## Validation
+
+Contract tests cover discovery, pagination, schema mismatch, text/structured responses, secret environment headers, tool failures and invalid URLs. Live server authentication and tool mapping remain pending until a Relay runtime connection is supplied. Draft PR/issue #2 must stay open until a sandbox catalog refresh succeeds through this independent MCP connection.
+
+SDK reference: https://github.com/modelcontextprotocol/python-sdk
