@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import {
   api,
+  ApiError,
   post,
   safeBitbucketUrl,
   type Evidence,
@@ -430,7 +431,13 @@ export default function Workspace() {
         );
       }
     } catch (e) {
-      setRecoverId(value.id);
+      if (e instanceof ApiError && e.status === 409 && ["stale_plan", "expired_plan"].includes(e.code || "")) {
+        setRecoverId("");
+        storage.set("attemptedPlan", "");
+        setPlan(null);
+      } else {
+        setRecoverId(value.id);
+      }
       setError(errorText(e));
     } finally {
       actionLock.current = false;

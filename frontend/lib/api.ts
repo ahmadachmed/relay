@@ -75,6 +75,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    public code?: string,
   ) {
     super(message);
   }
@@ -97,7 +98,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
           : Array.isArray(detail)
             ? detail.map((x: { msg: string }) => x.msg).join("; ")
             : detail?.message || `Request failed (HTTP ${response.status})`;
-      throw new ApiError(message, response.status);
+      throw new ApiError(message, response.status, typeof detail?.code === "string" ? detail.code : undefined);
     }
     return data as T;
   } catch (error) {

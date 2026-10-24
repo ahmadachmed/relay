@@ -398,3 +398,21 @@ test("theme follows system, preserves explicit choice, and survives reload", asy
  await page.getByRole("button",{name:"Preview plan",exact:true}).click();
  expect(previews).toBe(0);
  });
+
+for (const code of ["stale_plan", "expired_plan"]) {
+ test(`${code} permits fresh preview after reload`,async({page})=>{
+ await fixtures(page);
+ let previews=0;
+ await page.route("**/api/plans/preview",r=>{previews++;return r.fulfill({contentType:"application/json",body:JSON.stringify(pinned)});});
+ await page.route(`**/api/plans/${id}/execute`,r=>r.fulfill({status:409,contentType:"application/json",body:JSON.stringify({detail:{code,message:"Preview again"}})}));
+ await page.goto("/ui/");
+ await page.getByRole("button",{name:"Preview plan",exact:true}).click();
+ await page.getByRole("button",{name:"Confirm & run",exact:true}).click();
+ await expect(page.getByRole("alert").filter({hasText:"Preview again"})).toBeVisible();
+ await expect(page.getByRole("button",{name:"Check status",exact:true})).toHaveCount(0);
+ expect(await page.evaluate(()=>localStorage.getItem("relay.ui.attemptedPlan"))).toBe("");
+ await page.reload();
+ await page.getByRole("button",{name:"Preview plan",exact:true}).click();
+ await expect.poll(()=>previews).toBe(2);
+ });
+}
