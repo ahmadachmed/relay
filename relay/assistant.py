@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import os
 import re
+from urllib.parse import urlsplit
 from typing import Literal, Protocol
 
 import httpx
@@ -118,18 +119,57 @@ def output_schema():
     return schema
 
 
+def ai_configuration():
+    base = os.getenv('RELAY_AI_BASE_URL', 'https://api.openai.com/v1').rstrip('/')
+    protocol = os.getenv('RELAY_AI_API', 'responses')
+    mode = os.getenv('RELAY_AI_OUTPUT_FORMAT', 'json_schema')
+    try:
+        url = urlsplit(base)
+        local = url.hostname in ('localhost', '127.0.0.1', '::1')
+        official = base == 'https://api.openai.com/v1'
+        if (not local and not official) or url.scheme not in ('http', 'https') or url.username or url.password or url.query or url.fragment or url.path != '/v1' or not url.netloc:
+            raise ValueError()
+        _ = url.port
+        if protocol not in ('responses', 'chat_completions') or mode not in ('json_schema', 'json_object') or (protocol == 'responses' and mode != 'json_schema'):
+            raise ValueError()
+    except ValueError:
+        raise PlanError('ai_invalid_configuration', 'Use the official OpenAI base URL or a loopback /v1 endpoint and a supported API/output format.', 503) from None
+    key = os.getenv('RELAY_AI_API_KEY') if local else (os.getenv('RELAY_AI_API_KEY') or os.getenv('OPENAI_API_KEY'))
+    model = os.getenv('RELAY_AI_MODEL')
+    if not model or (not local and not key):
+        raise PlanError('ai_not_configured', 'Configure the backend AI model and provider key.', 503)
+    return base, protocol, mode, key, model, local
+
+
+def ai_configured():
+    try:
+        ai_configuration()
+        return True
+    except PlanError:
+        return False
+
+
 class OpenAIProvider:
     async def answer(self, context):
-        key, model = os.getenv('OPENAI_API_KEY'), os.getenv('RELAY_AI_MODEL')
-        if not key or not model:
-            raise PlanError('ai_not_configured', 'Configure OPENAI_API_KEY and RELAY_AI_MODEL on the backend.', 503)
-        payload = dict(model=model, store=False, instructions=SYSTEM,
-            input=json.dumps(context, ensure_ascii=False), max_output_tokens=2000,
-            text={'format': {'type': 'json_schema', 'name': 'qa_suggestion', 'strict': True, 'schema': output_schema()}})
+        base, protocol, mode, key, model, local = ai_configuration()
+        schema = output_schema()
+        encoded = json.dumps(context, ensure_ascii=False)
+        if protocol == 'responses':
+            payload = dict(model=model, store=False, instructions=SYSTEM, input=encoded, max_output_tokens=2000,
+                text={'format': {'type': 'json_schema', 'name': 'qa_suggestion', 'strict': True, 'schema': schema}})
+            endpoint = base + '/responses'
+        else:
+            # JSON mode still undergoes the identical local schema/selection/citation checks.
+            instructions = SYSTEM + '\nReturn only a JSON object matching this schema:\n' + json.dumps(schema)
+            payload = dict(model=model, stream=False, max_tokens=2000,
+                messages=[{'role': 'system', 'content': instructions}, {'role': 'user', 'content': encoded}],
+                response_format=({'type': 'json_schema', 'json_schema': {'name': 'qa_suggestion', 'strict': True, 'schema': schema}}
+                                 if mode == 'json_schema' else {'type': 'json_object'}))
+            endpoint = base + '/chat/completions'
+        headers = {'Authorization': f'Bearer {key}'} if key else {}
         try:
-            async with httpx.AsyncClient(timeout=35, follow_redirects=False) as client:
-                async with client.stream('POST', 'https://api.openai.com/v1/responses',
-                        headers={'Authorization': f'Bearer {key}'}, json=payload) as response:
+            async with httpx.AsyncClient(timeout=35, follow_redirects=False, trust_env=not local) as client:
+                async with client.stream('POST', endpoint, headers=headers, json=payload) as response:
                     if response.status_code != 200:
                         raise PlanError('ai_provider_error', 'Model provider rejected the request. Check backend configuration and quota.', 502)
                     body = bytearray()
@@ -138,20 +178,29 @@ class OpenAIProvider:
                         if len(body) > 128_000:
                             raise ValueError('large response')
             data = json.loads(body)
-            if data.get('status') != 'completed':
-                raise ValueError('incomplete response')
-            texts = [c['text'] for item in data.get('output', []) if item.get('type') == 'message'
-                     for c in item.get('content', []) if c.get('type') == 'output_text']
-            if len(texts) != 1:
-                raise ValueError('refused or missing output')
-            result = json.loads(texts[0])
+            if protocol == 'responses':
+                if data.get('status') != 'completed':
+                    raise ValueError('incomplete response')
+                texts = [c['text'] for item in data.get('output', []) if item.get('type') == 'message'
+                         for c in item.get('content', []) if c.get('type') == 'output_text']
+                if len(texts) != 1:
+                    raise ValueError('refused or missing output')
+                result = json.loads(texts[0])
+            else:
+                choices = data.get('choices', [])
+                if len(choices) != 1 or choices[0].get('finish_reason') != 'stop':
+                    raise ValueError('incomplete or unexpected completion')
+                message = choices[0]['message']
+                if message.get('refusal') or message.get('tool_calls'):
+                    raise ValueError('refused or unexpected tools')
+                result = json.loads(message['content'])
             if result.get('selection'):
                 pairs = result['selection']['parameters']
                 if len({p['name'] for p in pairs}) != len(pairs):
                     raise ValueError('duplicate parameters')
                 result['selection']['parameters'] = {p['name']: p['value'] for p in pairs}
             return Answer.model_validate(result)
-        except (httpx.HTTPError, ValueError, KeyError, TypeError):
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, IndexError):
             raise PlanError('ai_invalid_response', 'Model unavailable or returned an invalid suggestion. Nothing was executed.', 502) from None
 
 

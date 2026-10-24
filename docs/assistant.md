@@ -32,7 +32,7 @@ Conversation continuity uses the existing local browser history. Only the curren
 - One model request at a time per server process; competing requests receive HTTP 429.
 - Input is capped at 48,000 UTF-8 bytes after redaction; each message is at most 4,000 characters and history at most eight turns. Oversized catalogs are rejected rather than silently truncated.
 - Output is capped at 2,000 tokens; the total request has a 40-second deadline and a 128 KB response limit. Input bytes bound the payload, not an exact tokenizer estimate. Configure account-level spend limits separately.
-- Requests use the fixed HTTPS OpenAI Responses endpoint with `store: false`, no redirect following, and no automatic retry. This setting does not establish a zero-data-retention agreement; follow your provider account's applicable data policy.
+- The default adapter uses the HTTPS OpenAI Responses endpoint with `store: false`, no redirect following, and no automatic retry. The optional loopback Chat Completions gateway is described below. This setting does not establish a zero-data-retention agreement; follow your provider account's applicable data policy.
 - Incomplete/refused/malformed model responses, invalid selections and unsupported citations are rejected. Provider error bodies are not returned to users or logged by this implementation. Disabling AI does not disable manual preview/run/status/evidence controls.
 
 ## Verification and remaining acceptance
@@ -42,3 +42,30 @@ Run `python -m pytest -q`, build the frontend, then `npm run test:e2e --prefix f
 No paid model calls or private pipelines are used by these tests. A live model evaluation with operator-approved configuration/data is still required for language quality, ambiguity handling and prompt-injection resistance. This is an initial delivery of #7, not a claim that all pilot or redaction acceptance is complete. Test-name discovery, multi-step autonomous tool use, streaming, pricing-based daily budgets, and deployment auth are not implemented.
 
 Protocol reference: [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs). The adapter uses `text.format` with a strict JSON schema and validates the result locally again.
+
+## Local 9router gateway
+
+Run Relay and 9router on the same machine, then configure the backend shell:
+
+```bash
+export RELAY_AI_ENABLED=1
+export RELAY_AI_BASE_URL='http://localhost:20128/v1'
+export RELAY_AI_API='chat_completions'
+export RELAY_AI_OUTPUT_FORMAT='json_object'
+export RELAY_AI_MODEL='EXACT_MODEL_ID_FROM_YOUR_9ROUTER'
+# If your 9router instance requires authentication:
+export RELAY_AI_API_KEY='YOUR_9ROUTER_KEY'
+python -m uvicorn relay.api:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Select an actual model/route ID from your 9router dashboard or `GET http://localhost:20128/v1/models` (include the gateway Bearer key when required). The example model string above is a placeholder. `json_object` sends the answer schema in the system instructions and still validates every returned answer locally. Use `RELAY_AI_OUTPUT_FORMAT=json_schema` when the selected gateway route supports strict schemas. Relay does not retry automatically or switch formats on failure.
+
+`RELAY_AI_BASE_URL` supports only the official `https://api.openai.com/v1` endpoint or loopback hosts (`localhost`, `127.0.0.1`, `::1`) with path `/v1`. HTTP is allowed for loopback. Credentials in URLs, query strings, fragments and remote custom hosts are rejected. Base URLs can have one trailing slash. `RELAY_AI_API` defaults to `responses`; the chat mode uses `/chat/completions`, non-streaming responses, a 2,000-token output limit and the same timeout/byte limits. Refusals, truncation and unexpected tool calls are rejected.
+
+For loopback gateways, Relay sends only the dedicated `RELAY_AI_API_KEY` if configured; it never inherits `OPENAI_API_KEY`. Local HTTP connections ignore environment proxy settings and do not follow redirects. Gateway authentication policy is controlled by your 9router instance. The `/api/assistant` status check recognizes local model configuration without requiring an OpenAI key; it checks configuration, not live connectivity.
+
+The sharing checkbox applies to the gateway and any upstream model service it routes to. Gateway logging, retention and forwarding policies are controlled by 9router; the Responses-specific `store:false` setting does not define gateway retention. The same explicit sharing controls, redaction, scoped citations and execution confirmation remain in place.
+
+Restart the Relay backend after configuration and refresh the UI. Verify `/api/assistant` reports `enabled:true, configured:true`, enable sharing, and send a harmless planning request first. Localhost refers to the machine/container running the Python backend. This connector was fixture-tested; connectivity and model compatibility on the operator's 9router instance still require a local smoke test.
+
+Reference: [9router integration documentation](https://github.com/decolua/9router/blob/master/gitbook/content/en/integration/other-tools.md).

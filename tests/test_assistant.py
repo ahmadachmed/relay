@@ -296,3 +296,62 @@ def test_escaped_single_quoted_assignment_and_adjacent_fields():
     value = redact("password='prefix\\'private-suffix'; visible=ok")
     assert 'private-suffix' not in value
     assert 'visible=ok' in value
+
+
+@pytest.mark.parametrize('mode', ['json_schema', 'json_object'])
+def test_local_chat_gateway_uses_dedicated_key_and_completion_protocol(monkeypatch, mode):
+    monkeypatch.setenv('RELAY_AI_BASE_URL', 'http://localhost:20128/v1/')
+    monkeypatch.setenv('RELAY_AI_API', 'chat_completions')
+    monkeypatch.setenv('RELAY_AI_OUTPUT_FORMAT', mode)
+    monkeypatch.setenv('RELAY_AI_MODEL', 'router/test-model')
+    monkeypatch.setenv('OPENAI_API_KEY', 'must-not-leak-to-router')
+    monkeypatch.delenv('RELAY_AI_API_KEY', raising=False)
+    original = httpx.AsyncClient
+    def handle(request):
+        assert str(request.url) == 'http://localhost:20128/v1/chat/completions'
+        assert 'authorization' not in request.headers
+        payload = json.loads(request.content)
+        assert payload['stream'] is False and payload['max_tokens'] == 2000
+        assert payload['response_format']['type'] == mode
+        assert len(payload['messages']) == 2
+        return httpx.Response(200, json={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(answer().model_dump())}}]})
+    def client(**kwargs):
+        assert kwargs['trust_env'] is False and kwargs['follow_redirects'] is False
+        return original(transport=httpx.MockTransport(handle), **kwargs)
+    monkeypatch.setattr(httpx, 'AsyncClient', client)
+    assert asyncio.run(OpenAIProvider().answer({})).action == 'clarify'
+
+
+@pytest.mark.parametrize('base', ['http://example.com/v1','http://localhost.evil.test/v1','http://user:pass@localhost:20128/v1','http://localhost:20128/v1?query=x','http://localhost:20128/v1#fragment','http://localhost:20128/other'])
+def test_invalid_gateway_url_rejected(monkeypatch, base):
+    from relay.assistant import ai_configuration
+    monkeypatch.setenv('RELAY_AI_BASE_URL', base)
+    monkeypatch.setenv('RELAY_AI_MODEL', 'test-model')
+    with pytest.raises(Exception) as error:
+        ai_configuration()
+    assert error.value.code == 'ai_invalid_configuration'
+
+
+def test_local_configuration_does_not_require_openai_key(harness, monkeypatch):
+    app, client, fake = harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_API','chat_completions')
+    monkeypatch.setenv('RELAY_AI_MODEL','router/model')
+    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    assert client.get('/api/assistant').json()['configured'] is True
+
+
+@pytest.mark.parametrize('finish,refusal,status', [('length',None,200),('stop','refused',200),('stop',None,302),('stop',None,401)])
+def test_local_completion_rejects_truncation_refusal_redirect_and_auth_error(monkeypatch, finish, refusal, status):
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_API','chat_completions')
+    monkeypatch.setenv('RELAY_AI_MODEL','router/model')
+    monkeypatch.setenv('RELAY_AI_API_KEY','dedicated-gateway-key')
+    original = httpx.AsyncClient
+    def handle(request):
+        assert request.headers['authorization'] == 'Bearer dedicated-gateway-key'
+        return httpx.Response(status, headers={'location':'https://example.com'}, json={'choices':[{'finish_reason':finish,'message':{'refusal':refusal,'content':json.dumps(answer().model_dump())}}]})
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs: original(transport=httpx.MockTransport(handle),**kwargs))
+    with pytest.raises(Exception) as error:
+        asyncio.run(OpenAIProvider().answer({}))
+    assert error.value.code in ('ai_invalid_response','ai_provider_error')

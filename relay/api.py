@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from .assistant import Assistant, ChatRequest
+from .assistant import Assistant, ChatRequest, ai_configured
 from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest, Contract
@@ -105,7 +105,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
 
     @app.get('/api/assistant')
     def assistant_status():
-        return {'enabled': os.getenv('RELAY_AI_ENABLED') == '1', 'configured': bool(os.getenv('OPENAI_API_KEY') and os.getenv('RELAY_AI_MODEL'))}
+        return {'enabled': os.getenv('RELAY_AI_ENABLED') == '1', 'configured': ai_configured()}
 
     @app.post('/api/assistant/chat')
     async def assistant_chat(body: ChatRequest):
