@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest
+from .providers import ProviderError
+from .providers.bitbucket import BitbucketCatalogProvider
 from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,6 +42,24 @@ def create_app(config=None, data=None, registry_path=None):
     @app.get('/api/project-registry')
     def project_registry():
         return registry.model_dump(mode='json')
+
+    @app.get('/api/project-registry/{project_id}/catalog')
+    async def catalog(project_id: str):
+        project = registry.projects.get(project_id)
+        if project is None:
+            raise HTTPException(404, 'Unknown project')
+        if not project.enabled:
+            raise HTTPException(409, 'Project is disabled')
+        if project.provider != 'bitbucket':
+            raise HTTPException(501, 'Provider is not installed')
+        provider = None
+        try:
+            provider = BitbucketCatalogProvider.from_environment()
+            return await provider.catalog(project)
+        except ProviderError as exc:
+            status = {'not_configured':503, 'unauthorized':502, 'forbidden':502,
+                      'not_found':502, 'rate_limited':503}.get(exc.code,502)
+            raise HTTPException(status, {'code':exc.code, 'message':str(exc)})
 
     @app.post('/api/plans/validate')
     def validate_plan(body: PlanRequest):
