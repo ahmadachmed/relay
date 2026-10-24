@@ -148,6 +148,7 @@ export default function Workspace() {
           ? [...old.filter((r) => !incoming.has(r.id)), ...list]
           : [...list, ...old.filter((r) => !incoming.has(r.id))];
       });
+      if (append) setPage(offset / 30);
       setMore(list.length === 30);
       setHistoryError("");
       setOnline(true);
@@ -166,6 +167,11 @@ export default function Workspace() {
         storage.set("selected", id);
         setRecoverId("");
         storage.set("attemptedPlan", "");
+      } else if (saved.status === "preview" && saved.expired_unclaimed === true) {
+        setRecoverId("");
+        storage.set("attemptedPlan", "");
+        setPlan(null);
+        setError("");
       } else if (saved.status === "rejected") {
         setRecoverId("");
         storage.set("attemptedPlan", "");
@@ -623,7 +629,6 @@ export default function Workspace() {
             className="text-button older"
             onClick={() => {
               const next = page + 1;
-              setPage(next);
               void loadHistory(next * 30, true);
             }}
           >

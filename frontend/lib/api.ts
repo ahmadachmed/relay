@@ -19,6 +19,7 @@ export type Project = {
 };
 export type Registry = { projects: Record<string, Project> };
 export type Plan = {
+  expired_unclaimed?: boolean;
   id: string;
   commit: string;
   selector: string;

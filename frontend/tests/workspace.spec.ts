@@ -416,3 +416,30 @@ for (const code of ["stale_plan", "expired_plan"]) {
  await expect.poll(()=>previews).toBe(2);
  });
 }
+
+test('expired unclaimed recovery unlocks a fresh preview',async({page})=>{
+ await fixtures(page);
+ await page.addInitScript(id=>localStorage.setItem('relay.ui.attemptedPlan',id),id);
+ await page.route(`**/api/plans/${id}`,r=>r.fulfill({contentType:'application/json',body:JSON.stringify({...pinned,expired_unclaimed:true,expires_at:Date.now()/1000-60})}));
+ await page.goto('/ui/');
+ await page.getByRole('button',{name:'Preview plan',exact:true}).click();
+ await expect(page.getByRole('region',{name:'Execution plan'})).toBeVisible();
+ expect(await page.evaluate(()=>localStorage.getItem('relay.ui.attemptedPlan'))).toBe('');
+});
+
+test('failed older-history request retries the same offset',async({page})=>{
+ await fixtures(page);
+ const offsets:number[]=[];
+ await page.route('**/api/remote-runs**',r=>{
+ const u=new URL(r.request().url());if(u.pathname!='/api/remote-runs')return r.fallback();
+ const offset=Number(u.searchParams.get('offset')||0);offsets.push(offset);
+ if(offset===0)return r.fulfill({contentType:'application/json',body:JSON.stringify(Array.from({length:30},(_,i)=>({...run,id:String(i).padStart(32,'0')})))});
+ if(offsets.length===2)return r.fulfill({status:502,contentType:'application/json',body:JSON.stringify({detail:'History temporarily unavailable'})});
+ return r.fulfill({contentType:'application/json',body:'[]'});
+ });
+ await page.goto('/ui/');
+ await page.getByRole('button',{name:'Load older runs',exact:true}).click();
+ await expect(page.getByText('History temporarily unavailable')).toBeVisible();
+ await page.getByRole('button',{name:'Load older runs',exact:true}).click();
+ await expect.poll(()=>offsets).toEqual([0,30,30]);
+});
