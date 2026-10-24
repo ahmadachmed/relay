@@ -62,8 +62,9 @@ This endpoint only reads Bitbucket. It checks UUID, repository endpoint, commit,
 branch and selector, then links the pipeline to the unknown plan. Parameters are
 an explicit operator attestation, not an automatically verified correlation.
 A target mismatch leaves the record unchanged. This operation never retries trigger.
-Automatic discovery/reconciliation, remote status polling, cancellation, report
-collection, and frontend Run controls remain subsequent work (#4–#6).
+Automatic discovery/reconciliation, report collection, and frontend Run controls
+remain subsequent work. Remote polling and cancellation are described in
+[monitoring.md](monitoring.md).
 
 Only administrator-curated, non-secret parameter values belong in the registry;
 these values and project snapshots are stored and returned by the local API.

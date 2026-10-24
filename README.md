@@ -68,3 +68,5 @@ See [Bitbucket setup](docs/providers.md) for API-token authentication and migrat
 `GET /api/project-registry/{project_id}/catalog` verifies the configured default branch and reads pipeline declarations directly from Bitbucket Cloud at its resolved commit. No clone or MCP configuration is required. Pipeline triggers are not implemented.
 
 Confirmed remote preview/trigger and recovery: [execution API](docs/execution.md).
+
+Remote run history, polling and cancel: [monitoring API](docs/monitoring.md).

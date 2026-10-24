@@ -1,13 +1,16 @@
 """Local-only API; do not expose to the internet without authentication."""
 import os
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest, Contract
 from .execution import ExecutionService, PlanError
+from .monitoring import RunMonitor
 from uuid import UUID
 from pydantic import model_validator
 from .providers import ProviderError
@@ -17,14 +20,28 @@ from pydantic import ValidationError
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def create_app(config=None, data=None, registry_path=None):
-    app = FastAPI(title='Relay QA Harness')
+def create_app(config=None, data=None, registry_path=None, monitoring=True):
     registry = load_registry(registry_path or os.getenv("RELAY_PROJECTS", ROOT / "projects.example.json"))
     runner = Runner(config or os.getenv('RELAY_CONFIG', ROOT / 'relay.example.json'), data or os.getenv('RELAY_DATA', ROOT / '.relay'))
+    execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
+    monitor = RunMonitor(execution)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = asyncio.create_task(monitor.run()) if monitoring else None
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title='Relay QA Harness', lifespan=lifespan)
     app.state.runner = runner
     app.state.registry = registry
-    execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
     app.state.execution = execution
+    app.state.monitor = monitor
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -67,6 +84,22 @@ def create_app(config=None, data=None, registry_path=None):
     async def reconcile_plan(plan_id: str, body: Reconciliation):
         return await execution.reconcile(plan_id, str(body.pipeline_uuid),
                                          BitbucketCatalogProvider.from_environment())
+
+    @app.get('/api/remote-runs')
+    def remote_runs(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+        return monitor.list(limit, offset)
+
+    @app.get('/api/remote-runs/{run_id}')
+    def remote_run(run_id: str):
+        return monitor.get(run_id)
+
+    @app.post('/api/remote-runs/{run_id}/refresh')
+    async def refresh_remote_run(run_id: str):
+        return await monitor.refresh(run_id)
+
+    @app.post('/api/remote-runs/{run_id}/cancel')
+    async def cancel_remote_run(run_id: str, body: Confirmation):
+        return await monitor.cancel(run_id)
 
     @app.get('/api/projects')
     def projects():
