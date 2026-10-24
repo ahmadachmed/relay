@@ -55,3 +55,7 @@ Then request `GET /api/project-registry/api/catalog`. A successful independent r
 Official setup/authentication references:
 - https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/
 - https://support.atlassian.com/atlassian-ai-gateway/docs/configure-authentication-via-api-token/
+
+### Atlassian `tool_error` troubleshooting
+
+Tool errors identify the failing stage (`repository`, `branches`, `pipeline_file`) without exposing upstream content. For personal tokens, verify the **agent-interface scope** `read:bitbucket:agent-interface` (ordinary Bitbucket REST repository read scopes are not equivalent). The account must have repo access, its workspace must be organization-linked, and administrators must allow the read_bitbucket permission group/API-token access. Check the project's real workspace/repo/default branch and pipeline file as well. A generic tool error alone does not prove which requirement failed; do not rotate credentials or change permissions blindly.

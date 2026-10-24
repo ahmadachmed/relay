@@ -292,3 +292,17 @@ def test_missing_basic_auth_secret_is_sanitized(monkeypatch):
     with pytest.raises(ProviderError) as e:MCPCatalogProvider.from_environment()
     assert e.value.code=='invalid_configuration'
     assert 'qa@example.com' not in str(e.value)
+
+
+@pytest.mark.parametrize('operation,stage',[('repo','repository'),('branches','branches'),('file','pipeline_file')])
+def test_tool_failure_identifies_stage_without_remote_content(operation,stage):
+    class Failed(Session):
+        async def call_tool(self,name,arguments):
+            if name==operation:
+                return CallToolResult(isError=True,content=[TextContent(type='text',text='secret upstream body')])
+            return await super().call_tool(name,arguments)
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(provider(Failed()).catalog(project()))
+    assert caught.value.code=='tool_error'
+    assert str(caught.value).startswith(stage+':')
+    assert 'secret' not in str(caught.value)

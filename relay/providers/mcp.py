@@ -185,19 +185,22 @@ class MCPCatalogProvider:
                 raise ProviderError('tool_missing','A configured catalog tool is not advertised by the MCP server.')
         workspace,repo = project.repository.split('/')
         context = dict(workspace=workspace,repo=repo,repository=project.repository,branch=project.default_branch,cursor=None)
-        async def call(binding):
+        async def call(binding, stage):
             arguments = render(binding.arguments,context,binding.omit_initial_cursor)
             from jsonschema import validate, ValidationError, SchemaError
             try: validate(arguments,tools[binding.tool].inputSchema)
             except (ValidationError,SchemaError):
                 raise ProviderError('invalid_configuration','Configured arguments do not match the MCP tool schema.') from None
-            return decode(await session.call_tool(binding.tool,arguments=arguments))
-        repository = select(await call(self.config.repository),self.config.repository.result_path)
+            try:
+                return decode(await session.call_tool(binding.tool,arguments=arguments))
+            except ProviderError as exc:
+                raise ProviderError(exc.code, f'{stage}: {exc}') from None
+        repository = select(await call(self.config.repository, 'repository'),self.config.repository.result_path)
         if not isinstance(repository,dict) or not repository:
             raise ProviderError('invalid_response','Repository tool returned no repository metadata.')
         branches=[]; seen=set()
         for _ in range(50):
-            data=await call(self.config.branches)
+            data=await call(self.config.branches, 'branches')
             names=select(data,self.config.branches.result_path)
             if self.config.branches.result_shape == 'single':
                 names=[names]
@@ -217,7 +220,7 @@ class MCPCatalogProvider:
         else: raise ProviderError('pagination_limit','Branch catalog is incomplete.')
         if project.default_branch not in branches:
             raise ProviderError('not_found','Configured branch is absent from MCP results.')
-        raw=select(await call(self.config.pipeline_file),self.config.pipeline_file.result_path)
+        raw=select(await call(self.config.pipeline_file, 'pipeline_file'),self.config.pipeline_file.result_path)
         if not isinstance(raw,str): raise ProviderError('invalid_response','Pipeline tool must return file text.')
         try:
             custom=yaml.safe_load(raw).get('pipelines',{}).get('custom',{})
