@@ -24,7 +24,7 @@ class EvidenceStore:
             db.execute('UPDATE evidence SET body=NULL,results=? WHERE expires_at<=? AND body IS NOT NULL',
                        ('[]', time.time()))
 
-    def upload(self, run_id, report_path, body):
+    def upload(self, run_id, report_path, body, *, source='manual_upload'):
         self.monitor.get(run_id)
         plan = self.execution.get(run_id)
         reports = plan['plan']['project']['reports']
@@ -36,7 +36,7 @@ class EvidenceStore:
         artifact_id = uuid4().hex
         metadata = dict(id=artifact_id, name=report_path, format=spec['format'],
             sha256=hashlib.sha256(body).hexdigest(), size=len(body),
-            source='manual_upload', association='operator_asserted', uploaded_at=time.time(),
+            source=source, association='operator_asserted' if source == 'manual_upload' else 'pipeline_uuid_namespace', uploaded_at=time.time(),
             parse_status='unsupported', error=None)
         results = []
         if spec['format'] in ('robot_xml', 'junit_xml'):
