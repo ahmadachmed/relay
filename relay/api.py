@@ -8,7 +8,7 @@ from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest
 from .providers import ProviderError
-from .providers.mcp import MCPCatalogProvider
+from .providers.bitbucket import BitbucketCatalogProvider
 from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -54,7 +54,7 @@ def create_app(config=None, data=None, registry_path=None):
             raise HTTPException(501, 'Provider is not installed')
         provider = None
         try:
-            provider = MCPCatalogProvider.from_environment()
+            provider = BitbucketCatalogProvider.from_environment()
             return await provider.catalog(project)
         except ProviderError as exc:
             status = {'not_configured':503, 'unauthorized':502, 'forbidden':502,
