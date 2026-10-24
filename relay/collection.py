@@ -60,17 +60,15 @@ class EvidenceCollector:
                                 result.update(status=existing['availability'], artifact_id=existing['id'])
                             else:
                                 data = await self.provider_factory().fetch_report(plan, spec)
-                                # A late worker must not mutate evidence after losing its lease.
-                                with self.execution.connect() as db:
-                                    owner = db.execute('SELECT token FROM evidence_collection WHERE run_id=?', (run_id,)).fetchone()
-                                if owner[0] != token:
-                                    return self.get(run_id)
-                                artifact = self.store.upload(run_id, spec['path'], data, source='bitbucket_downloads')
+                                artifact = self.store.upload(run_id, spec['path'], data,
+                                    source='bitbucket_downloads', collection_token=token)
                                 result.update(status='imported', artifact_id=artifact['id'], parse_status=artifact['parse_status'])
                         except ProviderError as exc:
                             result.update(status='missing' if exc.code == 'missing_evidence' else 'failed',
                                           error=dict(code=exc.code, message=str(exc)))
                         except PlanError as exc:
+                            if exc.code == 'collection_lease_lost':
+                                return self.get(run_id)
                             result.update(status='failed', error=dict(code=exc.code, message=str(exc)))
                     results.append(result)
         except TimeoutError:

@@ -137,3 +137,52 @@ def test_retention_runs_on_lifespan_without_evidence_read(tmp_path):
                 break
         else:
             pytest.fail('Scheduled retention did not clear expired evidence')
+
+
+@pytest.mark.parametrize('change', ['owner', 'expiry'])
+def test_collection_lease_is_checked_atomically_at_artifact_insert(tmp_path, change):
+    import time
+    app, plan = app_run(tmp_path)
+    collector = app.state.collector
+    original = collector.store.upload
+    calls = []
+    class Source:
+        async def fetch_report(self, record, spec):
+            return BODY
+    collector.provider_factory = Source
+    def handover_before_insert(*args, **kwargs):
+        with collector.execution.connect() as db:
+            if change == 'owner':
+                db.execute('UPDATE evidence_collection SET token=?,lease_until=? WHERE run_id=?',
+                           ('replacement', time.time() + 90, plan['id']))
+            else:
+                db.execute('UPDATE evidence_collection SET lease_until=0 WHERE run_id=?', (plan['id'],))
+        calls.append(1)
+        return original(*args, **kwargs)
+    collector.store.upload = handover_before_insert
+    asyncio.run(collector.collect(plan['id']))
+    with collector.execution.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM evidence').fetchone()[0] == 0
+        if change == 'owner':
+            assert db.execute('SELECT token FROM evidence_collection').fetchone()[0] == 'replacement'
+        db.execute('UPDATE evidence_collection SET lease_until=0')
+    assert len(calls) == 1
+    # A replacement collector can recover; the stale download did not consume the slot.
+    collector.store.upload = original
+    assert asyncio.run(collector.collect(plan['id']))['reports'][0]['status'] == 'imported'
+
+
+def test_parser_delay_past_lease_expiry_cannot_insert(tmp_path, monkeypatch):
+    import relay.evidence as evidence_module
+    app, plan = app_run(tmp_path)
+    original_parse = evidence_module.parse_report
+    def parse_then_expire(*args):
+        results = original_parse(*args)
+        with app.state.execution.connect() as db:
+            db.execute('UPDATE evidence_collection SET lease_until=0')
+        return results
+    monkeypatch.setattr(evidence_module, 'parse_report', parse_then_expire)
+    app.state.collector.provider_factory = lambda: transport(lambda r: httpx.Response(200, content=BODY))
+    asyncio.run(app.state.collector.collect(plan['id']))
+    with app.state.execution.connect() as db:
+        assert db.execute('SELECT COUNT(*) FROM evidence').fetchone()[0] == 0

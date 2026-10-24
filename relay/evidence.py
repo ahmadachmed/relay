@@ -24,7 +24,7 @@ class EvidenceStore:
             db.execute('UPDATE evidence SET body=NULL,results=? WHERE expires_at<=? AND body IS NOT NULL',
                        ('[]', time.time()))
 
-    def upload(self, run_id, report_path, body, *, source='manual_upload'):
+    def upload(self, run_id, report_path, body, *, source='manual_upload', collection_token=None):
         self.monitor.get(run_id)
         plan = self.execution.get(run_id)
         reports = plan['plan']['project']['reports']
@@ -48,6 +48,12 @@ class EvidenceStore:
         with self.execution.connect() as db:
             # A report slot is immutable. Retrying identical uploads returns its original evidence.
             db.execute('BEGIN IMMEDIATE')
+            if source == 'bitbucket_downloads':
+                owner = db.execute('SELECT token,lease_until FROM evidence_collection WHERE run_id=?',
+                                   (run_id,)).fetchone()
+                if (not collection_token or owner is None or owner[0] != collection_token
+                        or owner[1] <= time.time()):
+                    raise PlanError('collection_lease_lost', 'Collection lease expired or belongs to another worker')
             row = db.execute('SELECT metadata FROM evidence WHERE run_id=? AND report_path=?',
                              (run_id, report_path)).fetchone()
             if row:
