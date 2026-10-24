@@ -15,6 +15,14 @@ MAX_BYTES = 2_000_000
 TIMEOUT = 60
 
 
+def _is_pipeline_declaration(value):
+    if isinstance(value, list):
+        return bool(value)
+    # Discovery only: imported definitions are resolved by Bitbucket at runtime.
+    return (isinstance(value, dict) and set(value) == {'import'}
+            and isinstance(value['import'], str) and bool(value['import'].strip()))
+
+
 class BitbucketCatalogProvider:
     def __init__(self, email, token, transport=None):
         self.auth = httpx.BasicAuth(email, token)
@@ -91,7 +99,7 @@ class BitbucketCatalogProvider:
                 raise ValueError()
             custom = pipelines.get('custom', {})
             if (not isinstance(custom, dict)
-                    or any(not isinstance(k, str) or not isinstance(v, list) or not v
+                    or any(not isinstance(k, str) or not _is_pipeline_declaration(v)
                            for k, v in custom.items())):
                 raise ValueError()
         except (yaml.YAMLError, ValueError, RecursionError):

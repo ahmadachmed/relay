@@ -81,6 +81,39 @@ def test_missing_selector_is_unavailable():
     assert result['connected'] and not result['pipelines'][0]['available']
 
 
+@pytest.mark.parametrize('reference', ['shared:main:checks', 'checks@shared-pipelines'])
+@pytest.mark.parametrize('selected', [False, True])
+def test_imported_pipeline_discovery_with_local_pipeline(reference, selected):
+    raw = YAML + f'    imported-check:\n      import: {reference}\n'
+    configured = project()
+    if selected:
+        configured.pipelines['smoke'].selector = 'imported-check'
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return response(request, raw)
+
+    result = asyncio.run(provider(handler).catalog(configured))
+    assert result['connected']
+    assert result['pipelines'][0]['available']
+    assert result['pipelines'][0]['selector'] == (
+        'imported-check' if selected else 'smoke-tests')
+    assert len(calls) == 3  # Do not fetch or expose imported source definitions.
+    assert reference not in json.dumps(result)
+
+
+@pytest.mark.parametrize('declaration', [
+    '{}', '[]', '{import: null}', '{import: 123}', '{import: []}',
+    '{import: ""}', '{import: "   "}', '{script: [echo ok]}',
+])
+def test_invalid_pipeline_declaration_is_rejected(declaration):
+    raw = YAML + f'    invalid-check: {declaration}\n'
+    with pytest.raises(ProviderError) as caught:
+        asyncio.run(provider(lambda r: response(r, raw)).catalog(project()))
+    assert caught.value.code == 'invalid_pipeline_config'
+
+
 @pytest.mark.parametrize('stage', ['repository', 'branch'])
 def test_invalid_identity_stops_before_file(stage):
     calls = []
