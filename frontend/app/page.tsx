@@ -157,6 +157,7 @@ export default function Workspace() {
   }, []);
 
   const recoverPlan = useCallback(async (id: string) => {
+    setRecoverId(id);
     try {
       const saved = await api<Plan>(`/api/plans/${encodeURIComponent(id)}`);
       if (saved.status === "submitted") {
@@ -164,6 +165,10 @@ export default function Workspace() {
         storage.set("selected", id);
         setRecoverId("");
         storage.set("attemptedPlan", "");
+      } else if (saved.status === "rejected") {
+        setRecoverId("");
+        storage.set("attemptedPlan", "");
+        setPlan(saved);
       } else {
         setRecoverId(id);
         setPlan(saved);
@@ -354,7 +359,7 @@ export default function Workspace() {
     });
   }
   async function preview() {
-    if (!validContext || previewLock.current || actionLock.current) return;
+    if (!validContext || recoverId || storage.get("attemptedPlan") || previewLock.current || actionLock.current) return;
     previewLock.current = true;
     setBusy("preview");
     setError("");
@@ -384,6 +389,8 @@ export default function Workspace() {
   async function execute() {
     if (
       !plan ||
+      recoverId ||
+      storage.get("attemptedPlan") ||
       busy ||
       actionLock.current ||
       executed.current.has(plan.id) ||
@@ -411,6 +418,10 @@ export default function Workspace() {
           text: "Bitbucket accepted the pipeline. Pipeline progress and test evidence are tracked separately below.",
         });
         await loadHistory();
+      } else if (result.status === "rejected") {
+        setRecoverId("");
+        storage.set("attemptedPlan", "");
+        setError(result.error || "Submission rejected. Preview a new plan to retry.");
       } else {
         setRecoverId(result.id);
         setError(

@@ -385,3 +385,16 @@ test("theme follows system, preserves explicit choice, and survives reload", asy
   await theme.selectOption("system");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
 });
+
+ test("failed recovery retains its action and blocks a new preview", async ({page}) => {
+ await fixtures(page);
+ await page.addInitScript(id => localStorage.setItem("relay.ui.attemptedPlan", id), id);
+ let previews=0;
+ await page.route("**/api/plans/preview", r => { previews++; return r.abort(); });
+ await page.route(`**/api/plans/${id}`, r => r.fulfill({status:502,contentType:"application/json",body:JSON.stringify({detail:"Temporary recovery error"})}));
+ await page.goto("/ui/");
+ await expect(page.getByText("Temporary recovery error")).toBeVisible();
+ await expect(page.getByRole("button",{name:"Check status",exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Preview plan",exact:true}).click();
+ expect(previews).toBe(0);
+ });
