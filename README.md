@@ -73,4 +73,4 @@ Remote run history, polling and cancel: [monitoring API](docs/monitoring.md).
 
 Report upload and evidence parsing: [evidence API](docs/evidence.md).
 
-Optional repository Downloads collection and retention: [collection API](docs/collection.md).
+Pipeline Artifacts handoff and scheduled retention: [artifact workflow](docs/collection.md).
