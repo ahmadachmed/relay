@@ -61,3 +61,7 @@ See [architecture](docs/architecture.md) and [implementation plan](docs/plan.md)
 ## Pipeline registry foundation
 
 The new, separate [project registry](docs/project-registry.md) uses independent provider, configurable parameters and multiple report descriptors. Framework is optional metadata; examples cover Robot API, Robot/Appium and **pytest + Playwright Python**. Start with `projects.example.json` and validate plans at `/api/plans/validate`. This endpoint has no execution side effects. The original local demo remains compatible; its legacy Node Playwright adapter is not suitable for pytest projects. Bitbucket connection and execution are follow-up work.
+
+## Bitbucket catalog connection
+
+See [provider setup](docs/providers.md) for backend credentials and `GET /api/project-registry/{project_id}/catalog`. This read-only REST adapter verifies repository/branch access and configured pipeline availability. MCP transport and other execution providers remain future implementations.
