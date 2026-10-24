@@ -90,3 +90,31 @@ def test_pytest_setup_and_teardown_errors_are_failed_evidence(tmp_path):
     assert result['tests'][0]['artifact_ids'] == [artifact['id']]
     assert all(message in result['tests'][0]['message'] for message in ['setup error', 'teardown error'])
     assert store.download(run_id, artifact['id']) == body
+
+
+def test_robot_error_log_is_diagnostic_not_failed_test(tmp_path):
+    _, run_id, store = setup(tmp_path)
+    body = b'<robot><suite name="API"><test id="s1-t1" name="ok"><status status="PASS"/></test><status status="PASS"/></suite><errors><msg level="ERROR">diagnostic only</msg></errors></robot>'
+    artifact = store.upload(run_id, 'output.xml', body)
+    result = store.summary(run_id)
+    assert result['test_status'] == 'passed'
+    assert len(result['tests']) == 1
+    assert result['tests'][0]['status'] == 'pass'
+    assert store.download(run_id, artifact['id']) == body
+
+
+def test_results_from_multiple_reports_have_distinct_ids(tmp_path):
+    from relay.contracts import Report
+    app = create_app(ROOT / 'relay.example.json', tmp_path, monitoring=False)
+    app.state.registry.projects['api'].reports = [Report(format='junit_xml', path=p) for p in ['android.xml', 'ios.xml']]
+    run_id = submitted(app.state.execution)['id']
+    store = EvidenceStore(app.state.execution, app.state.monitor)
+    body = b'<testsuite name="smoke"><testcase classname="tests.Login" name="test_login"/></testsuite>'
+    artifacts = [store.upload(run_id, p, body) for p in ['android.xml', 'ios.xml']]
+    result = store.summary(run_id)
+    assert len(result['tests']) == len({t['id'] for t in result['tests']}) == 2
+    assert {t['artifact_ids'][0] for t in result['tests']} == {a['id'] for a in artifacts}
+    original_ids = [t['id'] for t in result['tests']]
+    assert store.upload(run_id, 'android.xml', body)['id'] == artifacts[0]['id']
+    restored = EvidenceStore(app.state.execution, app.state.monitor)
+    assert [t['id'] for t in restored.summary(run_id)['tests']] == original_ids

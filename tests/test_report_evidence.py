@@ -71,3 +71,17 @@ def test_multiple_errors_still_reject_incorrect_counters():
     body = b'<testsuite tests="1" errors="1"><testcase name="example"><error/><error/></testcase></testsuite>'
     with pytest.raises(ValueError, match='counters'):
         parse_report(body, 'junit_xml', 'a')
+
+
+def test_robot_diagnostic_does_not_hide_real_setup_failure():
+    body = b'<robot><suite name="API"><kw type="SETUP"><status status="FAIL">setup failed</status></kw><errors><msg level="ERROR">diagnostic</msg></errors></suite></robot>'
+    result = parse_report(body, 'robot_xml', 'a')
+    assert len(result) == 1
+    assert result[0]['status'] == 'error'
+    assert result[0]['message'] == 'setup failed'
+
+
+def test_result_ids_are_repeatable_within_artifact_and_distinct_across_artifacts():
+    body = b'<testsuite><testcase name="same"/></testsuite>'
+    assert parse_report(body, 'junit_xml', 'a') == parse_report(body, 'junit_xml', 'a')
+    assert parse_report(body, 'junit_xml', 'a')[0]['id'] != parse_report(body, 'junit_xml', 'b')[0]['id']

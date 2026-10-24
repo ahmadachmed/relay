@@ -20,7 +20,7 @@ def parse_report(body, format, artifact_id):
     def add(identity, name, status, message=''):
         count = occurrences.get(identity, 0)
         occurrences[identity] = count + 1
-        stable_id = hashlib.sha256((identity + ':' + str(count)).encode()).hexdigest()
+        stable_id = hashlib.sha256((artifact_id + ':' + identity + ':' + str(count)).encode()).hexdigest()
         tests.append(dict(id=stable_id, name=name,
                           status=status, message=message[:2000], artifact_ids=[artifact_id], attempts=None))
 
@@ -45,9 +45,8 @@ def parse_report(body, format, artifact_id):
                 visit(child, names)
         for suite in root.findall('suite'):
             visit(suite, [])
-        for i, msg in enumerate(root.findall('./errors/msg')):
-            if msg.get('level') == 'ERROR':
-                add('robot-error-' + str(i), 'Robot execution error', 'error', msg.text or '')
+        # Root log messages are diagnostics, not additional test outcomes.
+        # Their original contents remain in the downloadable XML evidence.
     elif format == 'junit_xml':
         if root.tag not in ('testsuite', 'testsuites'):
             raise ValueError('Expected JUnit XML')
