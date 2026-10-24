@@ -4,13 +4,15 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from .runner import Runner
 from .registry import load_registry, resolve_plan
 from .contracts import PlanRequest, Contract
 from .execution import ExecutionService, PlanError
 from .monitoring import RunMonitor
+from .evidence import EvidenceStore
+from .report_evidence import MAX_REPORT_BYTES
 from uuid import UUID
 from pydantic import model_validator
 from .providers import ProviderError
@@ -25,6 +27,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     runner = Runner(config or os.getenv('RELAY_CONFIG', ROOT / 'relay.example.json'), data or os.getenv('RELAY_DATA', ROOT / '.relay'))
     execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
     monitor = RunMonitor(execution)
+    evidence_store = EvidenceStore(execution, monitor)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -100,6 +103,25 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     @app.post('/api/remote-runs/{run_id}/cancel')
     async def cancel_remote_run(run_id: str, body: Confirmation):
         return await monitor.cancel(run_id)
+
+    @app.get('/api/remote-runs/{run_id}/evidence')
+    def remote_evidence(run_id: str):
+        return evidence_store.summary(run_id)
+
+    @app.post('/api/remote-runs/{run_id}/evidence')
+    async def upload_remote_evidence(run_id: str, request: Request, report_path: str):
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_REPORT_BYTES:
+                raise HTTPException(413, 'Report exceeds 10 MB')
+            body.extend(chunk)
+        return evidence_store.upload(run_id, report_path, bytes(body))
+
+    @app.get('/api/remote-runs/{run_id}/evidence/{artifact_id}')
+    def download_remote_evidence(run_id: str, artifact_id: str):
+        return Response(evidence_store.download(run_id, artifact_id), media_type='application/octet-stream',
+            headers={'Content-Disposition': 'attachment; filename="evidence.bin"',
+                     'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'"})
 
     @app.get('/api/projects')
     def projects():
