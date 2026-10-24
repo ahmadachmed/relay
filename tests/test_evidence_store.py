@@ -60,3 +60,17 @@ def test_expired_report_does_not_continue_claiming_pass(tmp_path):
     with pytest.raises(PlanError) as error:
         store.download(run_id, artifact['id'])
     assert error.value.status == 410
+
+
+@pytest.mark.parametrize('counter', ['tests="2" failures="1"', 'failures="1"', 'errors="1"', 'skipped="1"', 'tests="-1"', 'tests="1.0"'])
+def test_inconsistent_junit_cannot_claim_pass(tmp_path, counter):
+    app = create_app(ROOT / 'relay.example.json', tmp_path, monitoring=False)
+    app.state.registry.projects['api'].reports[0].format = 'junit_xml'
+    run_id = submitted(app.state.execution)['id']
+    store = EvidenceStore(app.state.execution, app.state.monitor)
+    body = f'<testsuite {counter}><testcase name="test_ok"/></testsuite>'.encode()
+    artifact = store.upload(run_id, 'output.xml', body)
+    assert artifact['parse_status'] == 'failed'
+    assert store.summary(run_id)['test_status'] == 'incomplete'
+    assert store.summary(run_id)['tests'] == []
+    assert store.download(run_id, artifact['id']) == body

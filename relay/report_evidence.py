@@ -53,6 +53,7 @@ def parse_report(body, format, artifact_id):
             raise ValueError('Expected JUnit XML')
         def visit(suite, parents):
             names = parents + [suite.get('name', '')]
+            counts = dict(tests=0, failures=0, errors=0, skipped=0)
             for i, test in enumerate(suite.findall('testcase')):
                 name = ' / '.join(names + [test.get('classname', ''), test.get('name', '')])
                 status, message = 'pass', ''
@@ -61,11 +62,26 @@ def parse_report(body, format, artifact_id):
                     if child is not None:
                         status, message = outcome, child.get('message', '') + '\n' + (child.text or '')
                 add(name + ':' + str(i), name, status, message)
+                counts['tests'] += 1
+                counter = {'fail': 'failures', 'error': 'errors', 'skip': 'skipped'}.get(status)
+                if counter:
+                    counts[counter] += 1
             for i, error in enumerate(suite.findall('error')):
                 name = ' / '.join(names) + ' [suite error]'
                 add(name + str(i), name, 'error', error.get('message', '') + (error.text or ''))
+                counts['errors'] += 1
             for child in suite.findall('testsuite'):
-                visit(child, names)
+                nested = visit(child, names)
+                for key in counts:
+                    counts[key] += nested[key]
+            # Validate only supplied counters; wrapper totals include nested suites.
+            for key, actual in counts.items():
+                declared = suite.get(key)
+                if declared is not None:
+                    if (not declared.isascii() or not declared.isdecimal()
+                            or int(declared) != actual):
+                        raise ValueError('Inconsistent JUnit report counters')
+            return counts
         visit(root, [])
     else:
         raise ValueError('Unsupported report format')

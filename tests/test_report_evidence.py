@@ -34,3 +34,17 @@ def test_duplicate_suite_names_keep_unique_result_ids():
     body = b'<testsuites><testsuite name="suite"><testcase name="same"/></testsuite><testsuite name="suite"><testcase name="same"/></testsuite></testsuites>'
     results = parse_report(body, 'junit_xml', 'artifact-1')
     assert len({t['id'] for t in results}) == 2
+
+
+def test_nested_junit_totals_and_optional_counters():
+    body = b'<testsuites tests="4" failures="1" errors="1" skipped="1"><testsuite tests="2" failures="1"><testcase name="ok"/><testcase name="bad"><failure/></testcase></testsuite><testsuite><testcase name="error"><error/></testcase><testcase name="skip"><skipped/></testcase></testsuite></testsuites>'
+    assert [t['status'] for t in parse_report(body, 'junit_xml', 'a')] == ['pass', 'fail', 'error', 'skip']
+
+
+@pytest.mark.parametrize('body', [
+    b'<testsuites tests="2"><testsuite><testcase name="ok"/></testsuite></testsuites>',
+    b'<testsuites><testsuite tests="2"><testcase name="ok"/></testsuite></testsuites>',
+])
+def test_nested_junit_mismatches_are_rejected(body):
+    with pytest.raises(ValueError, match='counters'):
+        parse_report(body, 'junit_xml', 'a')
