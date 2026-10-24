@@ -59,3 +59,11 @@ Official setup/authentication references:
 ### Atlassian `tool_error` troubleshooting
 
 Tool errors identify the failing stage (`repository`, `branches`, `pipeline_file`) without exposing upstream content. For personal tokens, verify the **agent-interface scope** `read:bitbucket:agent-interface` (ordinary Bitbucket REST repository read scopes are not equivalent). The account must have repo access, its workspace must be organization-linked, and administrators must allow the read_bitbucket permission group/API-token access. Check the project's real workspace/repo/default branch and pipeline file as well. A generic tool error alone does not prove which requirement failed; do not rotate credentials or change permissions blindly.
+
+## Workbench router profile
+
+Copy `mcp.workbench.example.json` to ignored `mcp.local.json`, set `RELAY_WORKBENCH_API_KEY` in the backend environment, and restart with `RELAY_MCP_CONFIG=mcp.local.json`. The profile maps `execute_tools` to `bitbucket_get_repo` and `bitbucket_get_file` using workspace/repoSlug/ref/path as discovered from Workbench. One execution is sent per call; dotted paths support array indices, extracting `results.0.result`.
+
+The repository response envelope has been confirmed by a user-side live read. The file profile expects its raw string inside the same gateway result envelope; end-to-end Relay file reading remains to be confirmed. No branch-list tool was discovered: `branches` is intentionally omitted. Relay verifies the default branch by reading/parsing the pipeline YAML at that ref, returns only that branch and marks `branch_scope=pipeline_file_verified`. It never reports a full branch list in this mode. A failed file read/parse cannot return connected=true. Remote repo metadata/clone URLs are not echoed in the catalog.
+
+Use your existing private project registry and request `/api/project-registry/api/catalog`. This only reads metadata/file content; trigger operations are not called.

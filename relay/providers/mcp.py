@@ -31,7 +31,7 @@ class MCPConfig(Contract):
     header_env: dict[str, str] = Field(default_factory=dict)
     basic_auth_env: dict[Literal["email", "token"], str] | None = None
     repository: Binding
-    branches: Binding
+    branches: Binding | None = None
     pipeline_file: Binding
     timeout_seconds: int = Field(default=30, ge=1, le=120)
 
@@ -52,9 +52,12 @@ class MCPConfig(Contract):
 
 def select(value, path):
     for key in path.split('.') if path else []:
-        if not isinstance(value, dict) or key not in value:
+        if isinstance(value, list) and key.isdecimal() and int(key) < len(value):
+            value = value[int(key)]
+        elif isinstance(value, dict) and key in value:
+            value = value[key]
+        else:
             raise ProviderError('invalid_response', 'Configured MCP result field is missing.')
-        value = value[key]
     return value
 
 
@@ -180,7 +183,7 @@ class MCPCatalogProvider:
             seen.add(cursor)
         else: raise ProviderError('pagination_limit','MCP tool list is incomplete.')
         bindings = [self.config.repository,self.config.branches,self.config.pipeline_file]
-        for binding in bindings:
+        for binding in filter(None, bindings):
             if binding.tool not in tools:
                 raise ProviderError('tool_missing','A configured catalog tool is not advertised by the MCP server.')
         workspace,repo = project.repository.split('/')
@@ -198,28 +201,30 @@ class MCPCatalogProvider:
         repository = select(await call(self.config.repository, 'repository'),self.config.repository.result_path)
         if not isinstance(repository,dict) or not repository:
             raise ProviderError('invalid_response','Repository tool returned no repository metadata.')
-        branches=[]; seen=set()
-        for _ in range(50):
-            data=await call(self.config.branches, 'branches')
-            names=select(data,self.config.branches.result_path)
-            if self.config.branches.result_shape == 'single':
-                names=[names]
-            if not isinstance(names,list) or any(not isinstance(n,dict) or not isinstance(n.get('name'),str) for n in names):
-                raise ProviderError('invalid_response','Branch tool must return objects containing name.')
-            branches.extend(n['name'] for n in names)
-            try:
-                cursor=select(data,self.config.branches.cursor_path) if self.config.branches.cursor_path else None
-            except ProviderError:
-                if not self.config.branches.missing_cursor_is_end:
-                    raise
-                cursor=None
-            if cursor is None or cursor == '': break
-            if not isinstance(cursor,(str,int)) or str(cursor) in seen:
-                raise ProviderError('pagination_limit','Invalid or repeated branch cursor.')
-            seen.add(str(cursor));context['cursor']=cursor
-        else: raise ProviderError('pagination_limit','Branch catalog is incomplete.')
-        if project.default_branch not in branches:
-            raise ProviderError('not_found','Configured branch is absent from MCP results.')
+        branches=[]
+        if self.config.branches is not None:
+            branches=[]; seen=set()
+            for _ in range(50):
+                data=await call(self.config.branches, 'branches')
+                names=select(data,self.config.branches.result_path)
+                if self.config.branches.result_shape == 'single':
+                    names=[names]
+                if not isinstance(names,list) or any(not isinstance(n,dict) or not isinstance(n.get('name'),str) for n in names):
+                    raise ProviderError('invalid_response','Branch tool must return objects containing name.')
+                branches.extend(n['name'] for n in names)
+                try:
+                    cursor=select(data,self.config.branches.cursor_path) if self.config.branches.cursor_path else None
+                except ProviderError:
+                    if not self.config.branches.missing_cursor_is_end:
+                        raise
+                    cursor=None
+                if cursor is None or cursor == '': break
+                if not isinstance(cursor,(str,int)) or str(cursor) in seen:
+                    raise ProviderError('pagination_limit','Invalid or repeated branch cursor.')
+                seen.add(str(cursor));context['cursor']=cursor
+            else: raise ProviderError('pagination_limit','Branch catalog is incomplete.')
+            if project.default_branch not in branches:
+                raise ProviderError('not_found','Configured branch is absent from MCP results.')
         raw=select(await call(self.config.pipeline_file, 'pipeline_file'),self.config.pipeline_file.result_path)
         if not isinstance(raw,str): raise ProviderError('invalid_response','Pipeline tool must return file text.')
         try:
@@ -227,8 +232,10 @@ class MCPCatalogProvider:
             if not isinstance(custom,dict): raise ValueError()
         except (yaml.YAMLError,AttributeError,ValueError,RecursionError):
             raise ProviderError('invalid_pipeline_config','Invalid pipeline YAML from MCP.') from None
+        if self.config.branches is None:
+            branches=[project.default_branch]  # Verified by a successful pipeline-file read and parse.
         return dict(provider=project.provider,transport='mcp',connected=True,repository=project.repository,
-                    branch=project.default_branch,branch_scope='default_only' if self.config.branches.result_shape == 'single' else 'listed',branches=[b for b in branches if b in project.allowed_branches],
+                    branch=project.default_branch,branch_scope=('pipeline_file_verified' if self.config.branches is None else 'default_only' if self.config.branches.result_shape == 'single' else 'listed'),branches=[b for b in branches if b in project.allowed_branches],
                     pipelines=[dict(id=k,selector=p.selector,available=p.selector in custom,
                                     parameters={k:v.model_dump() for k,v in p.parameters.items()})
                                for k,p in project.pipelines.items()])

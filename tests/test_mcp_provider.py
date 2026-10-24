@@ -306,3 +306,44 @@ def test_tool_failure_identifies_stage_without_remote_content(operation,stage):
     assert caught.value.code=='tool_error'
     assert str(caught.value).startswith(stage+':')
     assert 'secret' not in str(caught.value)
+
+
+def test_workbench_gateway_profile():
+    c=MCPConfig.model_validate_json((ROOT/'mcp.workbench.example.json').read_text())
+    class Workbench(Session):
+        async def list_tools(self,cursor=None):
+            return NS(tools=[Tool(name='execute_tools',inputSchema={'type':'object','required':['executions']})],nextCursor=None)
+        async def call_tool(self,name,arguments):
+            assert name=='execute_tools'
+            assert len(arguments['executions'])==1
+            op=arguments['executions'][0]
+            assert op['args']['workspace']=='example'
+            assert op['args']['repoSlug']=='api-automation'
+            if op['tool']=='bitbucket_get_repo':result={'slug':'api-automation','mainbranch':'main'}
+            else:
+                assert op['tool']=='bitbucket_get_file'
+                assert op['args']['ref']=='main'
+                result='pipelines:\n  custom:\n    smoke-tests: []\n'
+            return CallToolResult(content=[TextContent(type='text',text=json.dumps({'results':[{'result':result}]}))])
+    result=asyncio.run(provider(Workbench(),c).catalog(project()))
+    assert result['branch_scope']=='pipeline_file_verified'
+    assert result['branches']==['main']
+    assert result['pipelines'][0]['available']
+
+
+def test_workbench_failed_file_does_not_verify_branch():
+    c=MCPConfig.model_validate_json((ROOT/'mcp.workbench.example.json').read_text())
+    class Failed(Session):
+        async def list_tools(self,cursor=None):
+            return NS(tools=[Tool(name='execute_tools',inputSchema={'type':'object'})],nextCursor=None)
+        async def call_tool(self,name,arguments):
+            op=arguments['executions'][0]['tool']
+            result={'slug':'api'} if op=='bitbucket_get_repo' else {'error':'not found'}
+            return CallToolResult(content=[],structuredContent={'results':[{'result':result}]})
+    with pytest.raises(ProviderError):asyncio.run(provider(Failed(),c).catalog(project()))
+
+
+@pytest.mark.parametrize('path',['results.2.result','results.-1.result','results.x.result'])
+def test_invalid_array_paths(path):
+    from relay.providers.mcp import select
+    with pytest.raises(ProviderError):select({'results':[{'result':1}]},path)

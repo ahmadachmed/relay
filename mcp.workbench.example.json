@@ -1,0 +1,38 @@
+{
+  "url": "https://workbench.amartha.id/mcp",
+  "header_env": {
+    "x-workbench-api-key": "RELAY_WORKBENCH_API_KEY"
+  },
+  "repository": {
+    "tool": "execute_tools",
+    "arguments": {
+      "executions": [
+        {
+          "tool": "bitbucket_get_repo",
+          "args": {
+            "workspace": "$workspace",
+            "repoSlug": "$repo"
+          }
+        }
+      ]
+    },
+    "result_path": "results.0.result"
+  },
+  "pipeline_file": {
+    "tool": "execute_tools",
+    "arguments": {
+      "executions": [
+        {
+          "tool": "bitbucket_get_file",
+          "args": {
+            "workspace": "$workspace",
+            "repoSlug": "$repo",
+            "ref": "$branch",
+            "path": "bitbucket-pipelines.yml"
+          }
+        }
+      ]
+    },
+    "result_path": "results.0.result"
+  }
+}
