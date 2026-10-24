@@ -1,0 +1,44 @@
+{
+  "url": "https://mcp.atlassian.com/v2/mcp",
+  "basic_auth_env": {
+    "email": "RELAY_ATLASSIAN_EMAIL",
+    "token": "RELAY_ATLASSIAN_API_TOKEN"
+  },
+  "repository": {
+    "tool": "executeRead",
+    "arguments": {
+      "name": "getBitbucketRepository",
+      "inputs": {
+        "workspaceId": "$workspace",
+        "repoId": "$repo"
+      }
+    },
+    "result_path": "data"
+  },
+  "branches": {
+    "tool": "executeRead",
+    "arguments": {
+      "name": "getBitbucketRepoBranch",
+      "inputs": {
+        "workspaceId": "$workspace",
+        "repoId": "$repo",
+        "branchName": "$branch"
+      }
+    },
+    "result_path": "data",
+    "result_shape": "single"
+  },
+  "pipeline_file": {
+    "tool": "executeRead",
+    "arguments": {
+      "name": "getBitbucketRepoFileContent",
+      "inputs": {
+        "workspaceId": "$workspace",
+        "repoId": "$repo",
+        "referenceOrSha": "$branch",
+        "path": "bitbucket-pipelines.yml"
+      }
+    },
+    "result_path": "data.content"
+  }
+}

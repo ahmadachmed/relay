@@ -30,3 +30,28 @@ SDK reference: https://github.com/modelcontextprotocol/python-sdk
 Nested SDK ExceptionGroup errors preserve known ProviderError codes and timeout classification; unknown exception messages remain sanitized.
 
 HTTP failures, including those nested inside SDK task groups, retain sanitized diagnostic codes: 401 → `unauthorized`, 403 → `forbidden`, 429 → `rate_limited`, other unsuccessful HTTP statuses → `upstream_error`. Relay returns these codes under `detail.code` (502 for upstream auth/access errors, 503 for rate limits). Remote URLs, headers and response bodies are never included. No automatic retry is performed.
+
+## Official Atlassian MCP profile
+
+Copy `mcp.atlassian.example.json` to ignored `mcp.local.json`. It uses `https://mcp.atlassian.com/v2/mcp`, with personal API-token Basic auth assembled in memory from `RELAY_ATLASSIAN_EMAIL` and `RELAY_ATLASSIAN_API_TOKEN`. Set those variables in the terminal/secret manager before starting Relay. Organization admins must permit API-token MCP authentication; a personal token is not a service-account bearer API key. Interactive OAuth remains unsupported.
+
+The profile maps `executeRead` to `getBitbucketRepository`, `getBitbucketRepoBranch` and `getBitbucketRepoFileContent`, using the operation names/input coordinates discovered from the connected Atlassian tool catalog. Responses are mapped from the `data` envelope. The SDK validates the advertised outer tool schema. Actual tool availability/scopes may vary by authentication/account: a live Relay session must verify the profile before treating it as production-ready.
+
+Branch lookup is explicitly `result_shape: single`: it verifies only the configured default branch and returns `branch_scope: default_only`. It does not claim to enumerate all repository branches. A normal listing binding returns `branch_scope: listed`.
+
+Start from the repository root:
+
+```bash
+cp mcp.atlassian.example.json mcp.local.json
+cp projects.example.json projects.local.json
+# Edit projects.local.json with your repository, branch and selectors.
+# Set RELAY_ATLASSIAN_EMAIL and RELAY_ATLASSIAN_API_TOKEN privately.
+RELAY_MCP_CONFIG=mcp.local.json RELAY_PROJECTS=projects.local.json \
+  python -m uvicorn relay.api:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Then request `GET /api/project-registry/api/catalog`. A successful independent runtime response requires `connected: true`, the intended default branch and `available: true` for the selected pipeline. No pipeline is triggered. The connected ChatGPT Atlassian session verified the operation catalog and branch envelope, but it is not a substitute for this runtime validation.
+
+Official setup/authentication references:
+- https://support.atlassian.com/atlassian-ai-gateway/docs/get-started-with-the-atlassian-remote-mcp-server/
+- https://support.atlassian.com/atlassian-ai-gateway/docs/configure-authentication-via-api-token/

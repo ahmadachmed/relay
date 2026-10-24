@@ -244,3 +244,51 @@ def test_api_preserves_provider_error_codes(tmp_path,monkeypatch,code,http_statu
         response=client.get('/api/project-registry/api/catalog')
     assert response.status_code==http_status
     assert response.json()['detail']=={'code':code,'message':'Sanitized diagnostic'}
+
+
+def test_atlassian_profile_and_basic_auth(tmp_path,monkeypatch):
+    import base64
+    path=ROOT/'mcp.atlassian.example.json'
+    monkeypatch.setenv('RELAY_MCP_CONFIG',str(path))
+    monkeypatch.setenv('RELAY_ATLASSIAN_EMAIL','qa@example.com')
+    monkeypatch.setenv('RELAY_ATLASSIAN_API_TOKEN','test-only-token')
+    p=MCPCatalogProvider.from_environment()
+    assert p.headers['Authorization']=='Basic '+base64.b64encode(b'qa@example.com:test-only-token').decode()
+    assert 'test-only-token' not in p.config.model_dump_json()
+    class Atlassian(Session):
+        async def list_tools(self,cursor=None):
+            return NS(tools=[Tool(name='executeRead',inputSchema={'type':'object','required':['name','inputs']})],nextCursor=None)
+        async def call_tool(self,name,arguments):
+            assert name=='executeRead'
+            operation=arguments['name'];inputs=arguments['inputs']
+            assert inputs['workspaceId']=='example'
+            assert inputs['repoId']=='api-automation'
+            if operation=='getBitbucketRepository':data={'name':'api'}
+            elif operation=='getBitbucketRepoBranch':
+                assert inputs['branchName']=='main'
+                data={'name':'main'}
+            else:
+                assert operation=='getBitbucketRepoFileContent'
+                assert inputs['referenceOrSha']=='main'
+                data={'content':'pipelines:\n  custom:\n    smoke-tests: []\n'}
+            return CallToolResult(content=[TextContent(type='text',text=json.dumps({'data':data}))])
+    result=asyncio.run(provider(Atlassian(),p.config).catalog(project()))
+    assert result['branch_scope']=='default_only'
+    assert result['branches']==['main']
+    assert result['pipelines'][0]['available']
+
+
+def test_basic_auth_rejects_duplicate_authorization():
+    data=config().model_dump()
+    data['basic_auth_env']={'email':'EMAIL','token':'TOKEN'}
+    data['header_env']={'authorization':'HEADER'}
+    with pytest.raises(ValueError):MCPConfig.model_validate(data)
+
+
+def test_missing_basic_auth_secret_is_sanitized(monkeypatch):
+    monkeypatch.setenv('RELAY_MCP_CONFIG',str(ROOT/'mcp.atlassian.example.json'))
+    monkeypatch.setenv('RELAY_ATLASSIAN_EMAIL','qa@example.com')
+    monkeypatch.delenv('RELAY_ATLASSIAN_API_TOKEN',raising=False)
+    with pytest.raises(ProviderError) as e:MCPCatalogProvider.from_environment()
+    assert e.value.code=='invalid_configuration'
+    assert 'qa@example.com' not in str(e.value)

@@ -1,4 +1,5 @@
 """MCP Streamable HTTP catalog adapter with explicit administrator tool bindings."""
+import base64
 import asyncio
 import json
 import os
@@ -10,6 +11,7 @@ import yaml
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from pydantic import Field, model_validator
+from typing import Literal
 from ..contracts import Contract, Project
 from . import ProviderError
 
@@ -19,6 +21,7 @@ class Binding(Contract):
     arguments: dict = Field(default_factory=dict)
     result_path: str = ''
     cursor_path: str | None = None
+    result_shape: Literal['list', 'single'] = 'list'
     missing_cursor_is_end: bool = False
     omit_initial_cursor: bool = True
 
@@ -26,6 +29,7 @@ class Binding(Contract):
 class MCPConfig(Contract):
     url: str
     header_env: dict[str, str] = Field(default_factory=dict)
+    basic_auth_env: dict[Literal["email", "token"], str] | None = None
     repository: Binding
     branches: Binding
     pipeline_file: Binding
@@ -38,6 +42,11 @@ class MCPConfig(Contract):
             raise ValueError('MCP URL must not contain credentials, query or fragment')
         if u.scheme != 'https' and not (u.scheme == 'http' and u.hostname in ('localhost','127.0.0.1')):
             raise ValueError('MCP requires HTTPS except on loopback')
+        if self.basic_auth_env is not None:
+            if set(self.basic_auth_env) != {'email','token'}:
+                raise ValueError('basic_auth_env requires email and token')
+            if any(k.lower() == 'authorization' for k in self.header_env):
+                raise ValueError('Authorization cannot be configured twice')
         return self
 
 
@@ -116,6 +125,12 @@ class MCPCatalogProvider:
         try:
             config = MCPConfig.model_validate_json(Path(path).read_text())
             headers = {key:os.environ[env] for key,env in config.header_env.items()}
+            if config.basic_auth_env is not None:
+                email=os.environ[config.basic_auth_env['email']]
+                token=os.environ[config.basic_auth_env['token']]
+                if not email or not token or ':' in email:
+                    raise ValueError()
+                headers['Authorization']='Basic '+base64.b64encode(f'{email}:{token}'.encode()).decode()
             if any(not v for v in headers.values()):
                 raise ValueError()
         except (OSError, ValueError, KeyError):
@@ -184,6 +199,8 @@ class MCPCatalogProvider:
         for _ in range(50):
             data=await call(self.config.branches)
             names=select(data,self.config.branches.result_path)
+            if self.config.branches.result_shape == 'single':
+                names=[names]
             if not isinstance(names,list) or any(not isinstance(n,dict) or not isinstance(n.get('name'),str) for n in names):
                 raise ProviderError('invalid_response','Branch tool must return objects containing name.')
             branches.extend(n['name'] for n in names)
@@ -208,7 +225,7 @@ class MCPCatalogProvider:
         except (yaml.YAMLError,AttributeError,ValueError,RecursionError):
             raise ProviderError('invalid_pipeline_config','Invalid pipeline YAML from MCP.') from None
         return dict(provider=project.provider,transport='mcp',connected=True,repository=project.repository,
-                    branch=project.default_branch,branches=[b for b in branches if b in project.allowed_branches],
+                    branch=project.default_branch,branch_scope='default_only' if self.config.branches.result_shape == 'single' else 'listed',branches=[b for b in branches if b in project.allowed_branches],
                     pipelines=[dict(id=k,selector=p.selector,available=p.selector in custom,
                                     parameters={k:v.model_dump() for k,v in p.parameters.items()})
                                for k,p in project.pipelines.items()])
