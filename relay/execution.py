@@ -40,6 +40,19 @@ class ExecutionService:
             raise PlanError('not_found', 'Unknown plan', 404)
         return json.loads(row[0])
 
+    def recovery_snapshot(self, plan_id):
+        # Serialize with claim: a reader must not certify an old preview while
+        # an in-flight writer is committing its trigger intent.
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT record FROM plans WHERE id=?', (plan_id,)).fetchone()
+            if row is None:
+                raise PlanError('not_found', 'Unknown plan', 404)
+            record = json.loads(row[0])
+            if record['status'] == 'preview':
+                record['expired_unclaimed'] = record['expires_at'] <= time.time()
+            return record
+
     def save(self, record):
         with self.connect() as db:
             db.execute('UPDATE plans SET record=? WHERE id=?', (json.dumps(record), record['id']))

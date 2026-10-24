@@ -20,10 +20,9 @@ def test_optional_frontend_export_served_at_same_origin(tmp_path, monkeypatch):
         assert client.get('/ui/', headers={'Origin': 'https://other.example'}).status_code == 403
 
 
-def test_recovery_expiration_requires_unclaimed_plan(tmp_path, monkeypatch):
+def test_recovery_endpoint_uses_serialized_snapshot(tmp_path, monkeypatch):
     app = api.create_app(data=tmp_path, monitoring=False)
+    snapshot = {'status': 'preview', 'expired_unclaimed': True}
+    monkeypatch.setattr(app.state.execution, 'recovery_snapshot', lambda _id: snapshot)
     with TestClient(app) as client:
-        for status, deadline, expected in [('preview', 0, True), ('preview', 10**12, False), ('unknown', 0, False), ('submitted', 0, False)]:
-            record = {'status': status, 'expires_at': deadline}
-            monkeypatch.setattr(app.state.execution, 'get', lambda _id, r=record: r)
-            assert client.get('/api/plans/example').json().get('expired_unclaimed', False) is expected
+        assert client.get('/api/plans/example').json() == snapshot

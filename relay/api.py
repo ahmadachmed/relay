@@ -1,6 +1,5 @@
 """Local-only API; do not expose to the internet without authentication."""
 import os
-import time
 import asyncio
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -89,10 +88,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
 
     @app.get('/api/plans/{plan_id}')
     def get_plan(plan_id: str):
-        record = execution.get(plan_id)
-        if record["status"] == "preview":
-            return {**record, "expired_unclaimed": record["expires_at"] <= time.time()}
-        return record
+        return execution.recovery_snapshot(plan_id)
 
     @app.post('/api/plans/{plan_id}/execute')
     async def execute_plan(plan_id: str, body: Confirmation):
