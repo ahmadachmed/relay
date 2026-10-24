@@ -676,3 +676,19 @@ test("AI provider error leaves commands usable on mobile", async ({ page }) => {
   await page.getByRole("button", { name: "Send command" }).click();
   await expect(page.getByText(/Available commands:/)).toBeVisible();
 });
+
+test('AI receives partial context when a required platform is missing',async({page})=>{
+ await fixtures(page);
+ const mobile={...project,pipelines:{smoke:{selector:'smoke-tests',parameters:{...parameters,PLATFORM:{kind:'platform',allowed_values:['ios','android'],required:true,default:null}}}}};
+ await page.route('**/api/project-registry',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({projects:{api:project,mobile}})}));
+ await page.route('**/api/assistant',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({enabled:true,configured:true})}));
+ let sent:any;
+ await page.route('**/api/assistant/chat',r=>{sent=r.request().postDataJSON();return r.fulfill({contentType:'application/json',body:JSON.stringify({answer:{action:'clarify',message:'Which platform?',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]})});});
+ await page.goto('/ui/');
+ await page.getByLabel('Project',{exact:true}).selectOption('mobile');
+ await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').check();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('use ios');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await expect.poll(()=>sent?.context).toMatchObject({project_id:'mobile',pipeline_id:'smoke',branch:'main',parameters:{ENV:'uat',TAGS:'smoke'}});
+ expect(sent.context.parameters).not.toHaveProperty('PLATFORM');
+});

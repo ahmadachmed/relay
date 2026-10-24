@@ -226,3 +226,30 @@ def test_timeout_releases_lock_without_mutating(harness):
     assert post(client).status_code == 504
     app.state.assistant.provider = fake
     assert post(client).status_code == 200
+
+
+@pytest.mark.parametrize('header', [
+    'Authorization: Basic dXNlcjphcGlfdG9rZW4=',
+    'Authorization: Digest username="alice", response="sensitive-value"',
+    'Proxy-Authorization: Basic dXNlcjphcGlfdG9rZW4=',
+    'authorization=Basic dXNlcjphcGlfdG9rZW4=',
+])
+def test_authorization_entire_value_is_redacted_before_provider(harness, header):
+    app, client, fake = harness
+    assert post(client, message=header).status_code == 200
+    sent = json.dumps(fake.calls)
+    for sensitive in ('dXNlcjphcGlfdG9rZW4=', 'sensitive-value', 'alice'):
+        assert sensitive not in sent
+    assert '[REDACTED]' in sent
+
+
+def test_quoted_authorization_and_following_lines_are_handled():
+    text = '{"Authorization": "Basic dXNlcjphcGlfdG9rZW4="}\nnext: visible'
+    value = redact(text)
+    assert 'dXNlcjphcGlfdG9rZW4=' not in value
+    assert 'next: visible' in value
+
+
+def test_escaped_json_digest_credentials_are_redacted():
+    value = redact(json.dumps({'Authorization': 'Digest username="alice", response="sensitive-value"'}))
+    assert 'alice' not in value and 'sensitive-value' not in value

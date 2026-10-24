@@ -589,7 +589,7 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
-        context: validContext
+        context: project?.enabled && pipeline && context.branch
           ? {
               project_id: context.project,
               pipeline_id: context.pipeline,
