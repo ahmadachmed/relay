@@ -411,3 +411,60 @@ def test_readiness_explains_missing_and_partial_evidence(harness, monkeypatch, a
     facts = fake.calls[-1]['selected_run']
     assert facts['analysis_ready'] is False
     assert facts['can_analyze_failure_details'] is False
+
+
+def test_bug_report_contract_requests_multiline_plain_text():
+    from relay.assistant import SYSTEM
+    description = output_schema()['properties']['bug_report_draft']['description']
+    assert 'multiline' in description and 'unverified hypotheses' in description
+    assert 'actual newlines and blank lines' in SYSTEM
+    assert 'Do not flatten' in SYSTEM
+
+@pytest.mark.parametrize('category', ['suspected_product_bug','suspected_automation_bug','environment_infrastructure','inconclusive'])
+def test_failure_classification_is_provisional_and_evidence_scoped(harness, monkeypatch, category):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze', classification=dict(category=category, reason='Possible issue.', artifact_ids=[ART], verification='Inspect service and script.'))
+    result = post(client, run_id=RUN, include_failure_details=True)
+    assert result.status_code == 200
+    assert result.json()['answer']['classification']['category'] == category
+    fake.result.classification.artifact_ids = ['other-run']
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 502
+
+
+def test_specific_classification_requires_shared_details(harness, monkeypatch):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze', classification=dict(category='suspected_product_bug', reason='Possible issue.', artifact_ids=[ART], verification='Reproduce.'))
+    assert post(client, run_id=RUN).status_code == 502
+    fake.result = answer(action='analyze')
+    assert post(client, run_id=RUN).json()['answer']['classification']['category'] == 'inconclusive'
+
+
+@pytest.mark.parametrize('category', ['suspected_product_bug', 'suspected_automation_bug', 'environment_infrastructure'])
+def test_classification_cannot_cite_failure_omitted_by_truncation(harness, monkeypatch, category):
+    app, client, fake = harness
+    summary = evidence(app, monkeypatch)
+    other = 'c'*32
+    summary['artifacts'].append(dict(id=other, availability='available', parse_status='parsed', association='operator_asserted'))
+    first = summary['tests'][0]
+    summary['tests'] = [dict(first, id=f'failure-{i}') for i in range(20)] + [dict(first, id='omitted', artifact_ids=[other], message='Unshared failure')]
+    fake.result = answer(action='analyze', classification=dict(category=category, reason='Possible issue.', artifact_ids=[other], verification='Inspect report.'))
+    response = post(client, run_id=RUN, include_failure_details=True)
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'ai_invalid_citation'
+    sent = fake.calls[-1]['selected_run']
+    assert sent['failures_truncated'] is True
+    assert not any(other in f['artifact_ids'] for f in sent['failures'])
+    fake.result.classification.artifact_ids = [ART]
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 200
+
+
+def test_classification_cannot_cite_passing_report(harness, monkeypatch):
+    app, client, fake = harness
+    summary = evidence(app, monkeypatch)
+    other = 'c'*32
+    summary['artifacts'].append(dict(id=other, availability='available', parse_status='parsed', association='operator_asserted'))
+    summary['tests'].append(dict(summary['tests'][0], id='passing', status='pass', artifact_ids=[other]))
+    fake.result = answer(action='analyze', classification=dict(category='suspected_product_bug', reason='Possible issue.', artifact_ids=[ART, other], verification='Inspect report.'))
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 502
