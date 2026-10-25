@@ -62,3 +62,19 @@ retention and a redacted AI-analysis handoff. The issue stays open.
 References:
 - https://developer.atlassian.com/cloud/bitbucket/rest/api-group-downloads/
 - https://support.atlassian.com/bitbucket-cloud/docs/use-bitbucket-artifacts-in-step/
+
+## Allure test-result JSON (initial support)
+
+Configure a report slot before creating a new run:
+
+```json
+{"format": "allure_json", "path": "allure-result.json"}
+```
+
+Upload one original `*-result.json` file to that slot (the configured path is the slot name, not a glob). Each original Allure result file represents one test execution, not the entire launch. Multiple known files require separate configured slots. Existing run plans retain their original report configuration; changing the registry affects new runs only.
+
+Statuses passed/failed/broken/skipped/unknown map to pass/fail/error/skip/unknown. Name, message and trace are normalized; raw bytes stay available for download. An explicitly unfinished stage is unknown. Attempts remain unknown: flaky/history identifiers alone do not establish rerun counts. No attachment paths, URLs or scripts are opened. ZIP, arrays, container files, attachment bundles and launch discovery are not supported. A malformed result is recorded as parse failed.
+
+Coverage is explicitly partial: even an uploaded passing result does not make the whole run passed. Allure slots keep evidence_complete false and disclose missing launch/container/attachment/retry coverage, while parsed failures can support bounded AI analysis under the existing sharing settings.
+
+Format reference: https://allurereport.org/docs/how-it-works-test-result-file/

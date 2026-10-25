@@ -1,5 +1,6 @@
 """Evidence-backed XML normalization. Never infer test success from pipeline status."""
 import hashlib
+import json
 from xml.etree.ElementTree import ParseError
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
@@ -8,8 +9,12 @@ MAX_REPORT_BYTES = 10_000_000
 
 
 def parse_report(body, format, artifact_id):
-    if len(body) > MAX_REPORT_BYTES or b'<!DOCTYPE' in body.upper() or b'<!ENTITY' in body.upper():
-        raise ValueError('Unsafe or oversized XML report')
+    if len(body) > MAX_REPORT_BYTES:
+        raise ValueError('Oversized report')
+    if format == 'allure_json':
+        return parse_allure_result(body, artifact_id)
+    if b'<!DOCTYPE' in body.upper() or b'<!ENTITY' in body.upper():
+        raise ValueError('Unsafe XML report')
     try:
         root = ET.fromstring(body, forbid_dtd=True)
     except (ParseError, DefusedXmlException):
@@ -91,3 +96,38 @@ def parse_report(body, format, artifact_id):
     if len(tests) > 100000:
         raise ValueError('Too many report results')
     return tests
+
+
+def parse_allure_result(body, artifact_id):
+    """One Allure *-result.json, not a launch, container or attachment bundle."""
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate JSON key')
+            result[key] = value
+        return result
+    try:
+        data = json.loads(body, object_pairs_hook=unique, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Invalid JSON constant')))
+    except (ValueError, UnicodeError, RecursionError):
+        raise ValueError('Malformed Allure JSON') from None
+    if not isinstance(data, dict):
+        raise ValueError('Expected one Allure test result object')
+    for key in ('uuid', 'name', 'status'):
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            raise ValueError('Missing Allure test identity or status')
+    statuses = {'passed': 'pass', 'failed': 'fail', 'broken': 'error', 'skipped': 'skip', 'unknown': 'unknown'}
+    if data['status'] not in statuses:
+        raise ValueError('Unsupported Allure status')
+    details = data.get('statusDetails', {})
+    if not isinstance(details, dict) or any(not isinstance(details.get(k, ''), str) for k in ('message', 'trace')):
+        raise ValueError('Invalid Allure status details')
+    name = data.get('fullName') or data['name']
+    if not isinstance(name, str) or (data.get('stage') is not None and not isinstance(data['stage'], str)):
+        raise ValueError('Invalid Allure identity or stage')
+    status = statuses[data['status']]
+    if data.get('stage', 'finished') != 'finished':
+        status = 'unknown'
+    return [dict(id=hashlib.sha256((artifact_id + ':' + data['uuid']).encode()).hexdigest(),
+                 name=name, status=status, message='\n'.join(details.get(k, '') for k in ('message', 'trace') if details.get(k))[:2000],
+                 artifact_ids=[artifact_id], attempts=None)]
