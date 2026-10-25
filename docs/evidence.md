@@ -51,9 +51,9 @@ expired. This is lazy expiry, not an idle-backend deletion guarantee. Encrypted
 storage, hosted user authorization and scheduled retention sweeps remain deployment
 work; retain the local API loopback restriction.
 
-Raw report bytes and messages can contain sensitive data. They stay local and
-`analysis_ready=false`; this delivery has no model/provider analysis endpoint and
-does not send evidence to AI. A redaction gateway must precede future AI analysis.
+Raw report bytes and messages can contain sensitive data. Raw files stay local. Optional AI sharing sends a redacted summary and, when enabled in Settings, bounded failure names/messages; see docs/assistant.md.
+
+`analysis_ready` means at least one test result references an available, parsed artifact. It is not an AI job status, evidence-completeness guarantee or permission to share. `evidence_complete` and `evidence_limitations` describe missing, expired, unsupported or failed-parse reports. Unknown attempts do not block bounded analysis of available results. No background analysis task is implied. A partial report set can support analysis while its missing evidence remains explicit.
 
 Remaining issue #5 work: verified automatic provider artifact transport, console and
 related screenshot/trace/Allure discovery, source-specific retry metadata, scheduled

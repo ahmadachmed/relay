@@ -60,6 +60,8 @@ type AiReply = {
     test_status: string;
     counts: Record<string, number>;
     attempts_known: boolean;
+    analysis_limitations?: string[];
+    can_analyze_failure_details?: boolean;
   } | null;
   limitations: string[];
 };
@@ -971,6 +973,10 @@ export default function Workspace() {
                 {aiReply.facts && (
                   <details open>
                     <summary>Observed report summary</summary>
+                    {aiReply.facts.analysis_limitations && <>
+                      <p>{aiReply.facts.can_analyze_failure_details ? "Available failure details can be analyzed with these limits." : "Analysis uses only available shared report data."}</p>
+                      <ul>{aiReply.facts.analysis_limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul>
+                    </>}
                     <p>
                       Pipeline: {aiReply.facts.pipeline_status} · Tests:{" "}
                       {aiReply.facts.test_status}

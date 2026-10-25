@@ -28,7 +28,7 @@ def test_upload_identity_evidence_and_scope(tmp_path):
         summary = client.get(url).json()
         assert summary['test_status'] == 'passed'
         assert summary['tests'][0]['artifact_ids'] == [artifact['id']]
-        assert summary['analysis_ready'] is False
+        assert summary['analysis_ready'] is True
         download = client.get(url + '/' + artifact['id'])
         assert download.content == REPORT
         assert download.headers['content-type'] == 'application/octet-stream'
