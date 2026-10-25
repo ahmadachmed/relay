@@ -830,3 +830,27 @@ test('report limitations explain partial analysis without a waiting state', asyn
  await expect(page.getByText('Available failure details can be analyzed with these limits.',{exact:true})).toBeVisible();
  await expect(page.getByText('A report format is unsupported; use Robot XML or JUnit XML.',{exact:true})).toBeVisible();
 });
+
+test('bug report preserves multiline text, wraps long evidence and never renders HTML', async ({page})=>{
+ await fixtures(page,true);
+ const draft = 'Title: Setup failed\n\nObservations:\n- HTTP 503\n- Setup blocked\n\nUnverified hypotheses:\n- Dependency unavailable\n\nEvidence:\n' + 'a'.repeat(400) + '\n\nFollow-up checks:\n- Inspect gateway\n<img src=x onerror="window.draftExecuted=true">';
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ await page.route('**/api/assistant/chat',r=>r.fulfill({json:{answer:{action:'analyze',message:'Review this draft.',selection:null,hypotheses:[],bug_report_draft:draft},run_id:id,facts:null,limitations:[]}}));
+ await page.setViewportSize({width:390,height:844});
+ await page.goto('/ui/');
+ await page.getByRole('button',{name:'Open run history'}).click();
+ await page.locator('.history-item').first().click();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('draft report');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await page.getByText('Bug report draft — review before sharing',{exact:true}).click();
+ const text = page.getByLabel('Bug report draft text');
+ await expect(text).toHaveText(draft);
+ expect(await text.textContent()).toBe(draft);
+ await expect(text).toHaveCSS('white-space','pre-wrap');
+ await expect(text.locator('img')).toHaveCount(0);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ expect(await page.evaluate(()=>Boolean((window as any).draftExecuted))).toBe(false);
+ await page.setViewportSize({width:1440,height:1000});
+ await expect(text).toBeVisible();
+ expect(await text.textContent()).toBe(draft);
+});

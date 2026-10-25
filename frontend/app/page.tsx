@@ -1011,7 +1011,7 @@ export default function Workspace() {
                 {aiReply.answer.bug_report_draft && (
                   <details>
                     <summary>Bug report draft — review before sharing</summary>
-                    <pre>{aiReply.answer.bug_report_draft}</pre>
+                    <pre className="bug-report-draft" aria-label="Bug report draft text">{aiReply.answer.bug_report_draft}</pre>
                   </details>
                 )}
                 {aiReply.answer.action === "cancel" &&

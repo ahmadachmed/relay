@@ -62,7 +62,7 @@ class Answer(Strict):
     message: str = Field(max_length=3000)
     selection: Selection | None = Field(description="Required complete selection for action propose; must be null for clarify, analyze and cancel.")
     hypotheses: list[Hypothesis] = Field(max_length=5)
-    bug_report_draft: str | None = Field(max_length=4000)
+    bug_report_draft: str | None = Field(max_length=4000, description="Plain-text multiline draft: title, observations, impact, unverified hypotheses, evidence references and follow-up checks separated by blank lines; use newline-separated list items.")
 
 
 class ModelProvider(Protocol):
@@ -114,7 +114,11 @@ user to wait for analysis readiness. Use analysis_limitations for actionable nex
 evidence and unknown attempts allow bounded analysis of available shared failures, not verified
 root causes. If failure_details_shared is false, suggest enabling that setting rather than waiting.
 Keyword retries are distinct from test attempts/reruns. Do not equate pipeline success with passing tests. Never
-assert root cause. Bug report is a draft only, separating observations from hypotheses. Reply in the
+assert root cause. Bug report is a draft only, separating observations from hypotheses.
+Format bug_report_draft as multiline plain text in the user's language: title, observations,
+impact, unverified hypotheses, evidence references, follow-up checks. Separate sections with
+actual newlines and blank lines; put each list item on its own line. Do not flatten the draft
+into a paragraph or use HTML. Return null when a draft is not requested or useful. Reply in the
 user's language. Never invent test catalogs: only registered pipelines are known.'''
 
 

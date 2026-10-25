@@ -81,3 +81,7 @@ Provider instructions and the shared wire-schema description require a complete 
 ## Evidence readiness and limits
 
 The evidence API computes analysis_ready from available parsed test results, independently of unknown test attempts and sharing settings. The assistant facts include evidence_complete, evidence_limitations, failure_details_shared, can_analyze_failure_details and analysis_limitations. background_analysis_pending is always false: there is no analysis job to wait for. Partial evidence supports only bounded conclusions from available shared failures. Missing or unsupported reports require a supported upload, failed parses require inspection, and disabled failure sharing requires changing Settings for detailed analysis. Unknown attempts limit rerun consistency claims; keyword retries do not supply test-attempt metadata. The UI displays these backend limitations separately from model prose. This does not establish root cause or verify operator-asserted artifact ownership.
+
+## Bug report presentation
+
+Requested drafts use plain text with a title and separate observations, impact, unverified hypotheses, evidence and follow-up sections. Provider instructions request actual newlines and one list item per line. The UI preserves whitespace, wraps long identifiers and displays model text through React escaping; it does not interpret HTML or Markdown. Reports remain drafts for review, with no publication action. Older one-line model output is displayed verbatim rather than inventing section boundaries. No clipboard action is added.

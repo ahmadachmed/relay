@@ -411,3 +411,11 @@ def test_readiness_explains_missing_and_partial_evidence(harness, monkeypatch, a
     facts = fake.calls[-1]['selected_run']
     assert facts['analysis_ready'] is False
     assert facts['can_analyze_failure_details'] is False
+
+
+def test_bug_report_contract_requests_multiline_plain_text():
+    from relay.assistant import SYSTEM
+    description = output_schema()['properties']['bug_report_draft']['description']
+    assert 'multiline' in description and 'unverified hypotheses' in description
+    assert 'actual newlines and blank lines' in SYSTEM
+    assert 'Do not flatten' in SYSTEM
