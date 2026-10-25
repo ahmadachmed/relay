@@ -688,7 +688,10 @@ test('AI receives partial context when a required platform is missing',async({pa
 });
 
 test('follow-up retains unapplied proposal separately from current context',async({page})=>{
- await fixtures(page);
+ await fixtures(page, true);
+ const other = "c".repeat(32);
+ await page.route(/\/api\/remote-runs\?/,r=>r.fulfill({json:[run,{...run,id:other}]}));
+ await page.route(`**/api/remote-runs/${other}`,r=>r.fulfill({json:{...run,id:other}}));
  await page.route('**/api/assistant',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({enabled:true,configured:true})}));
  const requests:any[]=[];
  const selection={project_id:'api',pipeline_id:'smoke',branch:'develop',parameters:{ENV:'dev',TAGS:'smoke'}};
@@ -697,10 +700,14 @@ test('follow-up retains unapplied proposal separately from current context',asyn
  return r.fulfill({contentType:'application/json',body:JSON.stringify({run_id:null,facts:null,limitations:[],answer:{action:'propose',message:'Suggested check is below.',selection,hypotheses:[],bug_report_draft:null}})});
  });
  await page.goto('/ui/');
+ await page.locator('.history-item').first().click();
  await page.getByText("Settings · AI context sharing", {exact:true}).click();
  await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').check();
  await page.getByRole('textbox',{name:'Structured command'}).fill('suggest a check');
  await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByRole('button',{name:'Use proposed context'})).toBeVisible();
+ await page.locator('.history-item').nth(1).click();
+ await page.locator('.history-item').first().click();
  await expect(page.getByRole('button',{name:'Use proposed context'})).toBeVisible();
  await page.getByRole('textbox',{name:'Structured command'}).fill('keep that branch and environment, change TAGS to regression');
  await page.getByRole('button',{name:'Send command'}).click();
@@ -772,4 +779,19 @@ test("late AI response cannot cross runs and request history stays scoped", asyn
   await expect(page.getByText("AI suggestion: Late response for A",{exact:true})).toHaveCount(0);
   await page.locator(".history-item").first().click();
   await expect(page.getByText("analyze A",{exact:true})).toBeVisible();
+});
+
+test("recovered submission retains originating conversation after reload", async ({page}) => {
+ await fixtures(page);
+ await page.route(`**/api/plans/${id}/execute`, r => r.abort("failed"));
+ await page.route(`**/api/plans/${id}`, r => r.fulfill({json:{...pinned,status:"submitted",pipeline:run.pipeline}}));
+ await page.goto('/ui/');
+ await page.getByRole('textbox',{name:'Structured command'}).fill('/help');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await page.getByRole('button',{name:'Preview plan',exact:true}).click();
+ await page.getByRole('button',{name:'Confirm & run',exact:true}).click();
+ await expect(page.getByText('Check the saved submission')).toBeVisible();
+ await page.reload();
+ await expect(page.getByRole('region',{name:'Selected run'})).toBeVisible();
+ await expect(page.getByLabel('QA conversation history')).toContainText('/help');
 });

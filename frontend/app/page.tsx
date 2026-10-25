@@ -116,7 +116,7 @@ export default function Workspace() {
     setReplies(old => ({...old, [selected || "planning"]: value}));
   }
   const aiLock = useRef(false);
-  const lastProposal = useRef<AiReply["answer"]["selection"]>(null);
+  const proposals = useRef<Record<string, AiReply["answer"]["selection"]>>({});
   useEffect(() => {
     void api<{ enabled: boolean; configured: boolean }>("/api/assistant")
       .then((s) => setAiEnabled(s.enabled && s.configured))
@@ -338,7 +338,6 @@ export default function Workspace() {
     revision.current++;
     setPlan(null);
     setError("");
-    lastProposal.current = null;
     setRun(null);
     setEvidence(null);
     setRunError("");
@@ -408,7 +407,7 @@ export default function Workspace() {
 
   function changeContext(next: Context) {
     revision.current++;
-    lastProposal.current = null;
+    proposals.current[selected || "planning"] = null;
     setContext(next);
     setAiReply(null);
     setPlan(null);
@@ -476,6 +475,10 @@ export default function Workspace() {
     actionLock.current = true;
     setBusy("execute");
     setError("");
+    // Persist ownership before POST: the response can be lost after acceptance.
+    const owned = {...conversations, [value.id]: conversations[value.id] || messages};
+    storage.set("conversations-v1", JSON.stringify(owned));
+    setConversations(owned);
     storage.set("attemptedPlan", value.id);
     setRecoverId(value.id);
     try {
@@ -484,7 +487,7 @@ export default function Workspace() {
       });
       setPlan(result);
       if (result.status === "submitted") {
-        setConversations(old => ({...old, [result.id]: [...messages, {role: "relay", text: "Bitbucket accepted the pipeline."}]}));
+        setConversations(old => ({...old, [result.id]: [...(old[result.id] || messages), {role: "relay", text: "Bitbucket accepted the pipeline."}]}));
         setSelected(result.id);
         setRecoverId("");
         storage.set("attemptedPlan", "");
@@ -613,7 +616,7 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
-        previous_proposal: lastProposal.current,
+        previous_proposal: proposals.current[conversationKey] || null,
         context: project?.enabled && pipeline && context.branch
           ? {
               project_id: context.project,
@@ -628,7 +631,7 @@ export default function Workspace() {
           .map((m) => ({ role: m.role, text: m.text.slice(0, 4000) })),
       });
       if (version === revision.current) {
-        if (value.answer.action === "propose") lastProposal.current = value.answer.selection;
+        if (value.answer.action === "propose") proposals.current[conversationKey] = value.answer.selection;
         setAiReply(value);
         addMessage({
           role: "relay",
@@ -706,7 +709,7 @@ export default function Workspace() {
             setEvidence(null);
             setPlan(null);
             setConversations(old => ({...old, planning: [initialMessage]}));
-            lastProposal.current = null;
+            proposals.current.planning = null;
             setReplies(old => ({...old, planning: null}));
             setHistoryOpen(false);
           }}
