@@ -439,3 +439,32 @@ def test_specific_classification_requires_shared_details(harness, monkeypatch):
     assert post(client, run_id=RUN).status_code == 502
     fake.result = answer(action='analyze')
     assert post(client, run_id=RUN).json()['answer']['classification']['category'] == 'inconclusive'
+
+
+@pytest.mark.parametrize('category', ['suspected_product_bug', 'suspected_automation_bug', 'environment_infrastructure'])
+def test_classification_cannot_cite_failure_omitted_by_truncation(harness, monkeypatch, category):
+    app, client, fake = harness
+    summary = evidence(app, monkeypatch)
+    other = 'c'*32
+    summary['artifacts'].append(dict(id=other, availability='available', parse_status='parsed', association='operator_asserted'))
+    first = summary['tests'][0]
+    summary['tests'] = [dict(first, id=f'failure-{i}') for i in range(20)] + [dict(first, id='omitted', artifact_ids=[other], message='Unshared failure')]
+    fake.result = answer(action='analyze', classification=dict(category=category, reason='Possible issue.', artifact_ids=[other], verification='Inspect report.'))
+    response = post(client, run_id=RUN, include_failure_details=True)
+    assert response.status_code == 502
+    assert response.json()['detail']['code'] == 'ai_invalid_citation'
+    sent = fake.calls[-1]['selected_run']
+    assert sent['failures_truncated'] is True
+    assert not any(other in f['artifact_ids'] for f in sent['failures'])
+    fake.result.classification.artifact_ids = [ART]
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 200
+
+
+def test_classification_cannot_cite_passing_report(harness, monkeypatch):
+    app, client, fake = harness
+    summary = evidence(app, monkeypatch)
+    other = 'c'*32
+    summary['artifacts'].append(dict(id=other, availability='available', parse_status='parsed', association='operator_asserted'))
+    summary['tests'].append(dict(summary['tests'][0], id='passing', status='pass', artifact_ids=[other]))
+    fake.result = answer(action='analyze', classification=dict(category='suspected_product_bug', reason='Possible issue.', artifact_ids=[ART, other], verification='Inspect report.'))
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 502
