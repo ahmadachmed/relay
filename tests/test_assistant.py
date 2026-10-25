@@ -371,3 +371,43 @@ def test_action_selection_contract(harness, monkeypatch, action, has_selection):
 
 def test_wire_schema_explains_non_proposal_selection():
     assert 'must be null' in output_schema()['properties']['selection']['description']
+
+@pytest.mark.parametrize('share', [True, False])
+def test_readiness_is_evidence_not_background_work_or_attempts(harness, monkeypatch, share):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze')
+    response = post(client, run_id=RUN, include_failure_details=share)
+    assert response.status_code == 200
+    facts = fake.calls[0]['selected_run']
+    assert facts['analysis_ready'] is True
+    assert facts['background_analysis_pending'] is False
+    assert facts['attempts_known'] is False
+    assert facts['failure_details_shared'] is share
+    assert facts['can_analyze_failure_details'] is share
+    assert ('failures' in facts) is share
+    assert any('attempts' in limit for limit in facts['analysis_limitations'])
+    if not share:
+        assert any('Settings' in limit for limit in facts['analysis_limitations'])
+
+
+@pytest.mark.parametrize('availability,parse_status,expected', [
+    ('missing', 'not_attempted', 'missing'), ('expired', 'parsed', 'expired'),
+    ('available', 'failed', 'failed parsing'), ('available', 'unsupported', 'unsupported'),
+])
+def test_readiness_explains_missing_and_partial_evidence(harness, monkeypatch, availability, parse_status, expected):
+    app, client, fake = harness
+    summary = evidence(app, monkeypatch)
+    fake.result = answer(action='analyze')
+    summary['artifacts'].append({'id': 'c'*32, 'availability': availability, 'parse_status': parse_status})
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 200
+    facts = fake.calls[-1]['selected_run']
+    assert facts['analysis_ready'] is True
+    assert facts['can_analyze_failure_details'] is True
+    assert facts['evidence_complete'] is False
+    assert any(expected in limit for limit in facts['analysis_limitations'])
+    summary['artifacts'] = summary['artifacts'][1:]
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 200
+    facts = fake.calls[-1]['selected_run']
+    assert facts['analysis_ready'] is False
+    assert facts['can_analyze_failure_details'] is False

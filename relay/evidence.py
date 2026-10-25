@@ -10,6 +10,26 @@ from .report_evidence import parse_report, MAX_REPORT_BYTES
 RETENTION = 7 * 86400
 
 
+def report_readiness(artifacts, tests):
+    """Evidence availability, not a model job state or permission to share."""
+    usable = {a.get('id') for a in artifacts
+              if a.get('id') and a.get('availability') == 'available' and a.get('parse_status') == 'parsed'}
+    ready = any(set(t.get('artifact_ids', [])) & usable for t in tests)
+    limitations = []
+    for availability, parse_status, message in (
+        ('missing', None, 'Upload the missing configured report.'),
+        ('expired', None, 'Report retention expired; evidence is no longer available.'),
+        ('available', 'failed', 'A report failed parsing; inspect the report format and parser error.'),
+        ('available', 'unsupported', 'A report format is unsupported; use Robot XML or JUnit XML.'),
+    ):
+        if any(a.get('availability') == availability and (parse_status is None or a.get('parse_status') == parse_status) for a in artifacts):
+            limitations.append(message)
+    if not ready:
+        limitations.append('No usable parsed test results; provide a supported report for this run.')
+    return dict(analysis_ready=ready, evidence_complete=ready and not limitations,
+                evidence_limitations=limitations)
+
+
 class EvidenceStore:
     def __init__(self, execution, monitor):
         self.execution, self.monitor = execution, monitor
@@ -89,7 +109,7 @@ class EvidenceStore:
         elif tests:
             outcome = 'passed' if all(t['status'] in ('pass', 'skip') for t in tests) else 'unknown'
         return dict(run_id=run_id, test_status=outcome, artifacts=artifacts, tests=tests,
-                    analysis_ready=False)
+                    **report_readiness(artifacts, tests))
 
     def download(self, run_id, artifact_id):
         self.monitor.get(run_id)

@@ -77,3 +77,7 @@ Chat text is stored separately for each run in this browser, with a separate pla
 ## Invalid model suggestions
 
 Provider instructions and the shared wire-schema description require a complete selection only for propose; clarify/analyze/cancel must return null. The backend always enforces this relationship locally, in strict-schema and JSON-object modes. Invalid selections remain rejected. AI request errors offer an explicit Retry AI message action rather than Reconnect. A retry sends a new model request and never executes or cancels a pipeline. There is no automatic retry or format fallback.
+
+## Evidence readiness and limits
+
+The evidence API computes analysis_ready from available parsed test results, independently of unknown test attempts and sharing settings. The assistant facts include evidence_complete, evidence_limitations, failure_details_shared, can_analyze_failure_details and analysis_limitations. background_analysis_pending is always false: there is no analysis job to wait for. Partial evidence supports only bounded conclusions from available shared failures. Missing or unsupported reports require a supported upload, failed parses require inspection, and disabled failure sharing requires changing Settings for detailed analysis. Unknown attempts limit rerun consistency claims; keyword retries do not supply test-attempt metadata. The UI displays these backend limitations separately from model prose. This does not establish root cause or verify operator-asserted artifact ownership.

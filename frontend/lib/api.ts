@@ -53,6 +53,8 @@ export type Evidence = {
   run_id: string;
   test_status: string;
   analysis_ready: boolean;
+  evidence_complete: boolean;
+  evidence_limitations: string[];
   artifacts: {
     id?: string;
     name: string;

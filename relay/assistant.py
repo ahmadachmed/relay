@@ -10,6 +10,7 @@ from typing import Literal, Protocol
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from .evidence import report_readiness
 from .contracts import PlanRequest
 from .execution import PlanError
 from .registry import resolve_plan
@@ -107,7 +108,12 @@ For cancellation choose cancel only when the user explicitly requests stopping t
 the UI will ask for confirmation. Analyze only the selected run snapshot. Facts are rendered by the
 application separately; message is guidance, not an assertion of observed results. Hypotheses must be
 labelled uncertain and cite only artifact IDs supplied in facts. Missing reports, truncation and
-unknown attempt counts limit conclusions. Do not equate pipeline success with passing tests. Never
+unknown attempt counts limit conclusions. analysis_ready means usable parsed test results exist,
+not that a background model job is running; background_analysis_pending is false. Never tell the
+user to wait for analysis readiness. Use analysis_limitations for actionable next steps. Partial
+evidence and unknown attempts allow bounded analysis of available shared failures, not verified
+root causes. If failure_details_shared is false, suggest enabling that setting rather than waiting.
+Keyword retries are distinct from test attempts/reruns. Do not equate pipeline success with passing tests. Never
 assert root cause. Bug report is a draft only, separating observations from hypotheses. Reply in the
 user's language. Never invent test catalogs: only registered pipelines are known.'''
 
@@ -227,10 +233,18 @@ class Assistant:
                 run = self.monitor.get(request.run_id)
                 summary = self.evidence.summary(request.run_id)
                 facts = {'run_id': request.run_id, 'pipeline_status': run['pipeline_status'],
-                         'test_status': summary['test_status'], 'analysis_ready': summary['analysis_ready'],
+                         'test_status': summary['test_status'], **report_readiness(summary['artifacts'], summary['tests']),
+                         'background_analysis_pending': False,
+                         'failure_details_shared': request.include_failure_details,
                          'counts': dict(Counter(t['status'] for t in summary['tests'])),
                          'artifacts': [{k: a.get(k) for k in ('id', 'availability', 'parse_status', 'association')} for a in summary['artifacts']],
                          'attempts_known': all(t.get('attempts') is not None for t in summary['tests']) if summary['tests'] else False}
+                facts['analysis_limitations'] = list(facts['evidence_limitations'])
+                if not request.include_failure_details:
+                    facts['analysis_limitations'].append('Failure names/messages are not shared. Enable failure-detail sharing in Settings for failure analysis.')
+                if not facts['attempts_known']:
+                    facts['analysis_limitations'].append('Test attempts are unknown or incomplete; keyword retries do not establish test reruns.')
+                facts['can_analyze_failure_details'] = facts['analysis_ready'] and request.include_failure_details and any(t['status'] in ('fail', 'error') for t in summary['tests'])
                 if request.include_failure_details:
                     failed = [t for t in summary['tests'] if t['status'] in ('fail', 'error')]
                     facts['failures'] = [{'id': t['id'], 'name': redact(t['name'])[:300], 'message': redact(t.get('message', ''))[:1500],
