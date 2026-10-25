@@ -107,9 +107,14 @@ function errorText(error: unknown) {
 
 export default function Workspace() {
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [shareAi, setShareAi] = useState(false);
-  const [shareFailures, setShareFailures] = useState(false);
-  const [aiReply, setAiReply] = useState<AiReply | null>(null);
+  const [shareAi, setShareAi] = useState(true);
+  const [shareFailures, setShareFailures] = useState(true);
+  const [preferencesReady, setPreferencesReady] = useState(false);
+  const [replies, setReplies] = useState<Record<string, AiReply | null>>({});
+
+  function setAiReply(value: AiReply | null) {
+    setReplies(old => ({...old, [selected || "planning"]: value}));
+  }
   const aiLock = useRef(false);
   const lastProposal = useRef<AiReply["answer"]["selection"]>(null);
   useEffect(() => {
@@ -117,6 +122,17 @@ export default function Workspace() {
       .then((s) => setAiEnabled(s.enabled && s.configured))
       .catch(() => setAiEnabled(false));
   }, []);
+  useEffect(() => {
+    setShareAi(storage.get("shareAi") !== "false");
+    setShareFailures(storage.get("shareFailures") !== "false");
+    setPreferencesReady(true);
+  }, []);
+  useEffect(() => {
+    if (preferencesReady) {
+      storage.set("shareAi", String(shareAi));
+      storage.set("shareFailures", String(shareFailures));
+    }
+  }, [shareAi, shareFailures, preferencesReady]);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [context, setContext] = useState<Context>({
     project: "",
@@ -126,11 +142,17 @@ export default function Workspace() {
   });
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState("");
+  const aiReply = replies[selected || "planning"] || null;
   const [run, setRun] = useState<Run | null>(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [recoverId, setRecoverId] = useState("");
-  const [messages, setMessages] = useState<Message[]>([initialMessage]);
+  const [conversations, setConversations] = useState<Record<string, Message[]>>({});
+  const conversationKey = selected || "planning";
+  const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
+  const setMessages = useCallback((value: Message[] | ((old: Message[]) => Message[])) => {
+    setConversations(old => ({...old, [conversationKey]: typeof value === "function" ? value(old[conversationKey] || (selected ? [] : [initialMessage])) : value}));
+  }, [conversationKey, selected]);
   const [command, setCommand] = useState("");
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
@@ -167,7 +189,7 @@ export default function Workspace() {
   );
   const addMessage = useCallback(
     (message: Message) => setMessages((old) => [...old.slice(-39), message]),
-    [],
+    [setMessages],
   );
 
   const loadHistory = useCallback(async (offset = 0, append = false) => {
@@ -268,20 +290,16 @@ export default function Workspace() {
         }
         setSelected(storage.get("selected") || "");
         try {
-          const saved = JSON.parse(storage.get("messages") || "null");
-          if (Array.isArray(saved))
-            setMessages(
-              saved
-                .filter(
-                  (m: Message) =>
-                    ["user", "relay"].includes(m.role) &&
-                    typeof m.text === "string",
-                )
-                .slice(-40),
-            );
-        } catch {
-          /* Ignore invalid session history. */
-        }
+          const saved = JSON.parse(storage.get("conversations-v1") || "{}");
+          const clean: Record<string, Message[]> = {};
+          if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+            for (const [key, value] of Object.entries(saved)) {
+              if ((key === "planning" || /^[a-f0-9]{32}$/.test(key)) && Array.isArray(value))
+                clean[key] = value.filter(m => m && ["user", "relay"].includes(m.role) && typeof m.text === "string").slice(-40);
+            }
+          }
+          setConversations(clean);
+        } catch { /* Ignore invalid stored conversations. */ }
         const pending = storage.get("attemptedPlan");
         if (pending) {
           executed.current.add(pending);
@@ -305,8 +323,8 @@ export default function Workspace() {
     if (context.project) storage.set("context", JSON.stringify(context));
   }, [context]);
   useEffect(() => {
-    if (registry) storage.set("messages", JSON.stringify(messages));
-  }, [messages, registry]);
+    if (registry) storage.set("conversations-v1", JSON.stringify(conversations));
+  }, [conversations, registry]);
   useEffect(() => {
     const timer = setInterval(() => setClock(Date.now()), 1000);
     return () => clearInterval(timer);
@@ -317,8 +335,10 @@ export default function Workspace() {
   }, [loadHistory]);
   useEffect(() => {
     activeRun.current = selected;
+    revision.current++;
+    setPlan(null);
+    setError("");
     lastProposal.current = null;
-    setAiReply(null);
     setRun(null);
     setEvidence(null);
     setRunError("");
@@ -464,6 +484,7 @@ export default function Workspace() {
       });
       setPlan(result);
       if (result.status === "submitted") {
+        setConversations(old => ({...old, [result.id]: [...messages, {role: "relay", text: "Bitbucket accepted the pipeline."}]}));
         setSelected(result.id);
         setRecoverId("");
         storage.set("attemptedPlan", "");
@@ -684,9 +705,9 @@ export default function Workspace() {
             setRun(null);
             setEvidence(null);
             setPlan(null);
-            setMessages([initialMessage]);
+            setConversations(old => ({...old, planning: [initialMessage]}));
             lastProposal.current = null;
-            setAiReply(null);
+            setReplies(old => ({...old, planning: null}));
             setHistoryOpen(false);
           }}
         >
@@ -719,7 +740,7 @@ export default function Workspace() {
               <button
                 className={`history-item ${selected === r.id ? "current" : ""}`}
                 key={r.id}
-                disabled={Boolean(busy)}
+                disabled={Boolean(busy) && busy !== "ai"}
                 onClick={() => {
                   setSelected(r.id);
                   setHistoryOpen(false);
@@ -846,7 +867,8 @@ export default function Workspace() {
             className="conversation-thread"
             aria-label="QA conversation history"
           >
-            {messages.map((m, i) => (
+            {selected && messages.length === 0 && <p>No conversation for this run yet.</p>}
+          {messages.map((m, i) => (
               <div className={`message ${m.role}`} key={i}>
                 <span className="message-avatar">
                   {m.role === "relay" ? "r" : "Y"}
@@ -931,8 +953,8 @@ export default function Workspace() {
                     </>
                   )}
                 {aiReply.facts && (
-                  <div>
-                    <h3>Observed report summary</h3>
+                  <details open>
+                    <summary>Observed report summary</summary>
                     <p>
                       Pipeline: {aiReply.facts.pipeline_status} · Tests:{" "}
                       {aiReply.facts.test_status}
@@ -948,7 +970,7 @@ export default function Workspace() {
                         ? "reported"
                         : "unknown or incomplete"}
                     </p>
-                  </div>
+                  </details>
                 )}
                 {aiReply.answer.hypotheses.map((h, i) => (
                   <div key={i}>
@@ -1072,8 +1094,8 @@ export default function Workspace() {
           )}
 
           {selected && (
-            <section className="run-card" aria-label="Selected run">
-              <div className="card-heading">
+            <section className="run-card" aria-label="Selected run"><details open key={`progress-${selected}`}>
+              <summary className="card-heading">
                 <span className="icon-box">
                   <History size={16} />
                 </span>
@@ -1082,7 +1104,7 @@ export default function Workspace() {
                   <p className="mono">{selected}</p>
                 </div>
                 {run && <Badge value={run.pipeline_status} />}
-              </div>
+              </summary>
               {runError && (
                 <p role="alert" className="small-error">
                   {runError}
@@ -1203,7 +1225,7 @@ export default function Workspace() {
                   )}
                 </>
               )}
-            </section>
+            </details></section>
           )}
 
           {selected && (
@@ -1211,8 +1233,8 @@ export default function Workspace() {
               className="evidence-card"
               aria-label="Test evidence"
               id="test-evidence"
-            >
-              <div className="card-heading">
+            ><details open key={`evidence-${selected}`}>
+              <summary className="card-heading">
                 <span className="icon-box">
                   <FileText size={16} />
                 </span>
@@ -1221,7 +1243,7 @@ export default function Workspace() {
                   <p>Actual report results, separate from pipeline status.</p>
                 </div>
                 {evidence && <Badge value={evidence.test_status} />}
-              </div>
+              </summary>
               {evidenceError && (
                 <p className="small-error" role="alert">
                   {evidenceError}
@@ -1354,37 +1376,10 @@ export default function Workspace() {
                   different file for an occupied slot will be rejected.
                 </small>
               </div>
-            </section>
+            </details></section>
           )}
         </div>
         <div className="composer-wrap">
-          {aiEnabled && (
-            <div className="ai-sharing">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={shareAi}
-                  disabled={Boolean(busy)}
-                  onChange={(e) => {
-                    setShareAi(e.target.checked);
-                    if (!e.target.checked) setShareFailures(false);
-                  }}
-                />
-                Send chat, recent conversation, configured context and selected
-                run summary to AI
-              </label>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={shareFailures}
-                  disabled={!shareAi || Boolean(busy)}
-                  onChange={(e) => setShareFailures(e.target.checked)}
-                />
-                Include failure names/messages (best-effort redaction; verify
-                sensitive content first)
-              </label>
-            </div>
-          )}
 
           <form className="composer" onSubmit={sendCommand}>
             <label className="sr-only" htmlFor="command">
@@ -1434,6 +1429,34 @@ export default function Workspace() {
             <X size={16} />
           </button>
         </div>
+          {aiEnabled && (
+            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={shareAi}
+                  disabled={Boolean(busy)}
+                  onChange={(e) => {
+                    setShareAi(e.target.checked);
+
+                  }}
+                />
+                Send chat, recent conversation, configured context and selected
+                run summary to AI
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={shareFailures}
+                  disabled={Boolean(busy)}
+                  onChange={(e) => setShareFailures(e.target.checked)}
+                />
+                Include failure names/messages (best-effort redaction; verify
+                sensitive content first)
+              </label>
+            </details>
+          )}
+
         <p className="context-description">
           A clear target makes a useful check.
         </p>

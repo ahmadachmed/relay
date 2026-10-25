@@ -522,7 +522,7 @@ test("failed older-history request retries the same offset", async ({
   await expect.poll(() => offsets).toEqual([0, 30, 30]);
 });
 
-test("AI is opt-in and proposals invalidate the previous plan without executing", async ({
+test("AI sharing can be disabled and proposals invalidate the previous plan without executing", async ({
   page,
 }) => {
   const state = await fixtures(page);
@@ -536,7 +536,7 @@ test("AI is opt-in and proposals invalidate the previous plan without executing"
   await page.route("**/api/assistant/chat", (r) => {
     aiCalls++;
     expect(r.request().postDataJSON().share_context).toBe(true);
-    expect(r.request().postDataJSON().include_failure_details).toBe(false);
+    expect(r.request().postDataJSON().include_failure_details).toBe(true);
     return r.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -560,6 +560,8 @@ test("AI is opt-in and proposals invalidate the previous plan without executing"
   });
   await page.goto("/ui/");
   const command = page.getByRole("textbox", { name: "Structured command" });
+  await page.getByText("Settings · AI context sharing", {exact:true}).click();
+  await page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI").uncheck();
   await command.fill("run regression on dev");
   await page.getByRole("button", { name: "Send command" }).click();
   expect(aiCalls).toBe(0);
@@ -567,11 +569,8 @@ test("AI is opt-in and proposals invalidate the previous plan without executing"
   await expect(
     page.getByRole("region", { name: "Execution plan" }),
   ).toBeVisible();
-  await page
-    .getByLabel(
-      "Send chat, recent conversation, configured context and selected run summary to AI",
-    )
-    .check();
+  await page.locator("details.ai-sharing").evaluate((el) => { (el as HTMLDetailsElement).open = true; });
+  await page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI").check();
   await command.fill("run regression on dev");
   await page.getByRole("button", { name: "Send command" }).click();
   await expect(
@@ -622,11 +621,8 @@ test("AI cancellation only opens the existing explicit confirmation", async ({
   );
   await page.goto("/ui/");
   await page.getByRole("button", { name: /api/ }).first().click();
-  await page
-    .getByLabel(
-      "Send chat, recent conversation, configured context and selected run summary to AI",
-    )
-    .check();
+  await page.locator("details.ai-sharing").evaluate((el) => { (el as HTMLDetailsElement).open = true; });
+  await page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI").check();
   await page
     .getByRole("textbox", { name: "Structured command" })
     .fill("stop this run");
@@ -655,11 +651,8 @@ test("AI provider error leaves commands usable on mobile", async ({ page }) => {
   );
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/ui/");
-  await page
-    .getByLabel(
-      "Send chat, recent conversation, configured context and selected run summary to AI",
-    )
-    .check();
+  await page.locator("details.ai-sharing").evaluate((el) => { (el as HTMLDetailsElement).open = true; });
+  await page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI").check();
   await page
     .getByRole("textbox", { name: "Structured command" })
     .fill("analyze");
@@ -686,6 +679,7 @@ test('AI receives partial context when a required platform is missing',async({pa
  await page.route('**/api/assistant/chat',r=>{sent=r.request().postDataJSON();return r.fulfill({contentType:'application/json',body:JSON.stringify({answer:{action:'clarify',message:'Which platform?',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]})});});
  await page.goto('/ui/');
  await page.getByLabel('Project',{exact:true}).selectOption('mobile');
+ await page.getByText("Settings · AI context sharing", {exact:true}).click();
  await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').check();
  await page.getByRole('textbox',{name:'Structured command'}).fill('use ios');
  await page.getByRole('button',{name:'Send command'}).click();
@@ -703,6 +697,7 @@ test('follow-up retains unapplied proposal separately from current context',asyn
  return r.fulfill({contentType:'application/json',body:JSON.stringify({run_id:null,facts:null,limitations:[],answer:{action:'propose',message:'Suggested check is below.',selection,hypotheses:[],bug_report_draft:null}})});
  });
  await page.goto('/ui/');
+ await page.getByText("Settings · AI context sharing", {exact:true}).click();
  await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').check();
  await page.getByRole('textbox',{name:'Structured command'}).fill('suggest a check');
  await page.getByRole('button',{name:'Send command'}).click();
@@ -713,4 +708,68 @@ test('follow-up retains unapplied proposal separately from current context',asyn
  expect(requests[1].previous_proposal).toEqual(selection);
  expect(requests[1].context.branch).toBe('main');
  await expect(page.getByLabel('Branch',{exact:true})).toHaveValue('main');
+});
+
+
+test("run conversations are isolated and sharing opt-outs persist", async ({ page }) => {
+  await fixtures(page, true);
+  await page.route("**/api/assistant", r => r.fulfill({json:{enabled:true,configured:true}}));
+  await page.goto("/ui/");
+  await page.getByText("Settings · AI context sharing", {exact:true}).click();
+  const sharing = page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI");
+  const details = page.getByLabel("Include failure names/messages", {exact:false});
+  await expect(sharing).toBeChecked();
+  await expect(details).toBeChecked();
+  await details.uncheck();
+  await sharing.uncheck();
+  await page.getByRole("textbox", {name:"Structured command"}).fill("/help");
+  await page.getByRole("button", {name:"Send command"}).click();
+  const before = await page.getByLabel("QA conversation history").innerText();
+  await page.locator(".history-item").first().click();
+  await expect(page.getByText("No conversation for this run yet.")).toBeVisible();
+  await page.getByRole("textbox", {name:"Structured command"}).fill("/status");
+  await page.getByRole("button", {name:"Send command"}).click();
+  await page.reload();
+  await expect(page.getByLabel("QA conversation history")).not.toHaveText(before);
+  await page.getByText("Settings · AI context sharing", {exact:true}).click();
+  await expect(sharing).not.toBeChecked();
+  await expect(details).not.toBeChecked();
+  await expect(page.getByText("Run progress",{exact:true})).toBeVisible();
+  const card = page.getByRole("region",{name:"Selected run"});
+  await card.locator("summary").first().click();
+  await expect(card.getByRole("link",{name:/Open in Bitbucket/})).not.toBeVisible();
+  await card.locator("summary").first().click();
+  await expect(card.getByRole("link",{name:/Open in Bitbucket/})).toBeVisible();
+});
+
+test("late AI response cannot cross runs and request history stays scoped", async ({page}) => {
+  await fixtures(page, true);
+  const other = "c".repeat(32);
+  await page.route(/\/api\/remote-runs\?/, r => r.fulfill({json:[run, {...run,id:other}]}));
+  await page.route(`**/api/remote-runs/${other}`, r => r.fulfill({json:{...run,id:other}}));
+  await page.route("**/api/assistant", r => r.fulfill({json:{enabled:true,configured:true}}));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => {release=resolve;});
+  let started = false;
+  await page.route("**/api/assistant/chat", async r => {
+    const body = r.request().postDataJSON();
+    expect(body.run_id).toBe(id);
+    expect(body.history.every((m:{text:string}) => !m.text.includes("planning-only"))).toBe(true);
+    started=true;
+    await gate;
+    await r.fulfill({json:{answer:{action:"clarify",message:"Late response for A",selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:null,limitations:[]}});
+  });
+  await page.goto("/ui/");
+  await page.getByRole("textbox",{name:"Structured command"}).fill("/help planning-only");
+  await page.getByRole("button",{name:"Send command"}).click();
+  await page.locator(".history-item").first().click();
+  await page.getByRole("textbox",{name:"Structured command"}).fill("analyze A");
+  await page.getByRole("button",{name:"Send command"}).click();
+  await expect.poll(()=>started).toBe(true);
+  await page.locator(".history-item").nth(1).click();
+  release();
+  await expect(page.getByText("No conversation for this run yet.")).toBeVisible();
+  await expect(page.getByText("AI suggestion: Late response for A",{exact:true})).toHaveCount(0);
+  await page.locator(".history-item").first().click();
+  await expect(page.getByText("analyze A",{exact:true})).toBeVisible();
 });
