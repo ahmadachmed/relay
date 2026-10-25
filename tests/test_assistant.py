@@ -355,3 +355,19 @@ def test_local_completion_rejects_truncation_refusal_redirect_and_auth_error(mon
     with pytest.raises(Exception) as error:
         asyncio.run(OpenAIProvider().answer({}))
     assert error.value.code in ('ai_invalid_response','ai_provider_error')
+
+@pytest.mark.parametrize('action', ['clarify', 'analyze', 'cancel'])
+@pytest.mark.parametrize('has_selection', [False, True])
+def test_action_selection_contract(harness, monkeypatch, action, has_selection):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    selection = dict(project_id='api', pipeline_id='smoke', branch='main', parameters={}) if has_selection else None
+    fake.result = answer(action=action, selection=selection)
+    response = post(client, run_id=RUN, include_failure_details=True)
+    assert response.status_code == (502 if has_selection else 200)
+    if has_selection:
+        assert response.json()['detail']['code'] == 'ai_invalid_selection'
+
+
+def test_wire_schema_explains_non_proposal_selection():
+    assert 'must be null' in output_schema()['properties']['selection']['description']

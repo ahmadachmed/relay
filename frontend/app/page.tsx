@@ -155,6 +155,7 @@ export default function Workspace() {
   }, [conversationKey, selected]);
   const [command, setCommand] = useState("");
   const [error, setError] = useState("");
+  const [aiError, setAiError] = useState<{message: string; text: string} | null>(null);
   const [historyError, setHistoryError] = useState("");
   const [runError, setRunError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
@@ -334,6 +335,7 @@ export default function Workspace() {
     return () => clearInterval(timer);
   }, [loadHistory]);
   useEffect(() => {
+    setAiError(null);
     activeRun.current = selected;
     revision.current++;
     setPlan(null);
@@ -406,6 +408,7 @@ export default function Workspace() {
   }, [selected, loadEvidence]);
 
   function changeContext(next: Context) {
+    setAiError(null);
     revision.current++;
     proposals.current[selected || "planning"] = null;
     setContext(next);
@@ -605,6 +608,7 @@ export default function Workspace() {
     }
     aiLock.current = true;
     actionLock.current = true;
+    setAiError(null);
     setBusy("ai");
     setError("");
     setAiReply(null);
@@ -639,7 +643,7 @@ export default function Workspace() {
         });
       }
     } catch (e) {
-      if (version === revision.current) setError(errorText(e));
+      if (version === revision.current) setAiError({message: errorText(e), text});
     } finally {
       aiLock.current = false;
       actionLock.current = false;
@@ -703,6 +707,7 @@ export default function Workspace() {
           className="new-check"
           disabled={Boolean(busy)}
           onClick={() => {
+            setAiError(null);
             setSelected("");
             storage.set("selected", "");
             setRun(null);
@@ -885,6 +890,14 @@ export default function Workspace() {
               </div>
             ))}
           </div>
+          {aiError && (
+            <div className="error-banner" role="alert">
+              {aiError.message} Retry sends this message to AI again; review sharing settings if needed.
+              <button className="text-button" disabled={Boolean(busy) || !shareAi || !aiEnabled}
+                onClick={() => void askAi(aiError.text)}>Retry AI message</button>
+              <button className="text-button" onClick={() => setAiError(null)}>Dismiss</button>
+            </div>
+          )}
           {error && (
             <div className="error-banner" role="alert">
               {error}

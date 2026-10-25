@@ -73,3 +73,7 @@ Reference: [9router integration documentation](https://github.com/decolua/9route
 ## Run conversations
 
 Chat text is stored separately for each run in this browser, with a separate planning conversation. Before execution, the originating messages are saved under the plan/run ID so recovery can restore them even if the execute response is lost. Existing run messages are preserved. Unapplied proposals are scoped to their conversation during the page session, including history round trips. Switching history does not reuse another run's chat; legacy unscoped messages are ignored because their ownership cannot be established. New check resets planning without deleting run conversations. AI cards are retained per run during the current page session; after reload, chat text is restored but AI cards require a new request. Pending AI responses are discarded when the selection changes. Run progress, evidence and observed summaries can be collapsed using their keyboard-accessible headings.
+
+## Invalid model suggestions
+
+Provider instructions and the shared wire-schema description require a complete selection only for propose; clarify/analyze/cancel must return null. The backend always enforces this relationship locally, in strict-schema and JSON-object modes. Invalid selections remain rejected. AI request errors offer an explicit Retry AI message action rather than Reconnect. A retry sends a new model request and never executes or cancels a pipeline. There is no automatic retry or format fallback.

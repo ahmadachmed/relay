@@ -795,3 +795,26 @@ test("recovered submission retains originating conversation after reload", async
  await expect(page.getByRole('region',{name:'Selected run'})).toBeVisible();
  await expect(page.getByLabel('QA conversation history')).toContainText('/help');
 });
+
+test("invalid model selection offers explicit AI retry without reconnect or execution", async ({page}) => {
+ const state = await fixtures(page, true);
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ let calls=0;
+ await page.route('**/api/assistant/chat',r=>{
+  calls++;
+  expect(r.request().postDataJSON().message).toBe('analyze uploaded report');
+  return calls===1 ? r.fulfill({status:502,json:{detail:{code:'ai_invalid_selection',message:'Unexpected model selection.'}}}) : r.fulfill({json:{answer:{action:'analyze',message:'Evidence reviewed.',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:null,limitations:[]}});
+ });
+ await page.goto('/ui/');
+ await page.locator('.history-item').first().click();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('analyze uploaded report');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByRole('button',{name:'Retry AI message'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Reconnect',exact:true})).toHaveCount(0);
+ expect(calls).toBe(1);
+ await page.getByRole('button',{name:'Retry AI message'}).click();
+ await expect(page.getByText('AI suggestion: Evidence reviewed.',{exact:true})).toBeVisible();
+ expect(calls).toBe(2);
+ expect(state.counts().executions).toBe(0);
+ expect(state.counts().cancellations).toBe(0);
+});
