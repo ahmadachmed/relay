@@ -822,11 +822,13 @@ test("invalid model selection offers explicit AI retry without reconnect or exec
 test('report limitations explain partial analysis without a waiting state', async ({page})=>{
  await fixtures(page,true);
  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
- await page.route('**/api/assistant/chat',r=>r.fulfill({json:{answer:{action:'analyze',message:'Bounded analysis.',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false,can_analyze_failure_details:true,analysis_limitations:['A report format is unsupported; use Robot XML or JUnit XML.','Test attempts are unknown or incomplete; keyword retries do not establish test reruns.']},limitations:[]}}));
+ await page.route('**/api/assistant/chat',r=>r.fulfill({json:{answer:{action:'analyze',message:'Bounded analysis.',classification:{category:'environment_infrastructure',reason:'Possible gateway issue.',artifact_ids:[],verification:'Inspect gateway logs.'},selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false,can_analyze_failure_details:true,analysis_limitations:['A report format is unsupported; use Robot XML or JUnit XML.','Test attempts are unknown or incomplete; keyword retries do not establish test reruns.']},limitations:[]}}));
  await page.goto('/ui/');
  await page.locator('.history-item').first().click();
  await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');
  await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByRole('region',{name:'Failure classification'})).toContainText('Environment / infrastructure');
+ await expect(page.getByRole('region',{name:'Failure classification'})).toContainText('Inspect gateway logs.');
  await expect(page.getByText('Available failure details can be analyzed with these limits.',{exact:true})).toBeVisible();
  await expect(page.getByText('A report format is unsupported; use Robot XML or JUnit XML.',{exact:true})).toBeVisible();
 });

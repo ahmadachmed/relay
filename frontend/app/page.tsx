@@ -44,6 +44,7 @@ type Context = {
 type AiReply = {
   run_id: string | null;
   answer: {
+    classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
     action: "clarify" | "propose" | "analyze" | "cancel";
     message: string;
     selection: {
@@ -994,6 +995,13 @@ export default function Workspace() {
                     </p>
                   </details>
                 )}
+                {aiReply.answer.classification && <section aria-label="Failure classification">
+                  <h3>Failure classification — unverified</h3>
+                  <strong>{{suspected_product_bug: "Suspected product bug", suspected_automation_bug: "Suspected automation bug", environment_infrastructure: "Environment / infrastructure", inconclusive: "Inconclusive"}[aiReply.answer.classification.category]}</strong>
+                  <p>{aiReply.answer.classification.reason}</p>
+                  <p>Verification: {aiReply.answer.classification.verification}</p>
+                  {aiReply.answer.classification.artifact_ids.map(id => <a key={id} href={`/api/remote-runs/${encodeURIComponent(aiReply.run_id!)}/evidence/${encodeURIComponent(id)}`}>Evidence {id.slice(0,10)} </a>)}
+                </section>}
                 {aiReply.answer.hypotheses.map((h, i) => (
                   <div key={i}>
                     <h3>Hypothesis — unverified</h3>

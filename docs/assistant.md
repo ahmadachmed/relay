@@ -85,3 +85,7 @@ The evidence API computes analysis_ready from available parsed test results, ind
 ## Bug report presentation
 
 Requested drafts use plain text with a title and separate observations, impact, unverified hypotheses, evidence and follow-up sections. Provider instructions request actual newlines and one list item per line. The UI preserves whitespace, wraps long identifiers and displays model text through React escaping; it does not interpret HTML or Markdown. Reports remain drafts for review, with no publication action. Older one-line model output is displayed verbatim rather than inventing section boundaries. No clipboard action is added.
+
+## Failure classification
+
+Analysis includes provisional triage: suspected product bug, suspected automation bug, environment/infrastructure or inconclusive. It includes a reason, scoped artifact references and verification steps. Specific labels require shared failure details and available parsed evidence. Unsupported references are rejected; absent classification falls back to inconclusive. The labels are not verified root causes. Setup failures can block child tests without proving independent product bugs. Classifications are model suggestions, not a deterministic diagnosis.

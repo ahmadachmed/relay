@@ -419,3 +419,23 @@ def test_bug_report_contract_requests_multiline_plain_text():
     assert 'multiline' in description and 'unverified hypotheses' in description
     assert 'actual newlines and blank lines' in SYSTEM
     assert 'Do not flatten' in SYSTEM
+
+@pytest.mark.parametrize('category', ['suspected_product_bug','suspected_automation_bug','environment_infrastructure','inconclusive'])
+def test_failure_classification_is_provisional_and_evidence_scoped(harness, monkeypatch, category):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze', classification=dict(category=category, reason='Possible issue.', artifact_ids=[ART], verification='Inspect service and script.'))
+    result = post(client, run_id=RUN, include_failure_details=True)
+    assert result.status_code == 200
+    assert result.json()['answer']['classification']['category'] == category
+    fake.result.classification.artifact_ids = ['other-run']
+    assert post(client, run_id=RUN, include_failure_details=True).status_code == 502
+
+
+def test_specific_classification_requires_shared_details(harness, monkeypatch):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze', classification=dict(category='suspected_product_bug', reason='Possible issue.', artifact_ids=[ART], verification='Reproduce.'))
+    assert post(client, run_id=RUN).status_code == 502
+    fake.result = answer(action='analyze')
+    assert post(client, run_id=RUN).json()['answer']['classification']['category'] == 'inconclusive'
