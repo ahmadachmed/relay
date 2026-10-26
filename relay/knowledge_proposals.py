@@ -148,12 +148,35 @@ class KnowledgeProposals:
             self.save(db, record)
         return record
 
+    def reconcile(self, db, record):
+        """Recover committed decisions before trusting a pending database status."""
+        if record['status'] not in ('draft', 'stored_unverified'):
+            return record
+        snapshot = self.snapshot(record['category'], record['scope_id'])
+        if snapshot['revision'] is None:
+            return record
+        with revisions.scope_directory(record['category'], record['scope_id']) as fd:
+            while snapshot:
+                if snapshot.get('proposal_id') == record['id']:
+                    record.update(status='applied', verification='operator_verified',
+                                  applied_revision=snapshot['revision'], applied_hash=snapshot['hash'],
+                                  approved_by=snapshot['actor'], approved_at=snapshot['created_at'])
+                    self.save(db, record)
+                    return record
+                previous = snapshot.get('previous')
+                snapshot = revisions.read_revision(fd, previous, record['category'], record['scope_id']) if previous else None
+        return record
+
+    @safe_error
     def edit(self, run_id, proposal_id, body):
         with self.execution.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            old = self.get(db, run_id, proposal_id)
+            old = self.reconcile(db, self.get(db, run_id, proposal_id))
+            if old['hash'] == body.expected_hash and old['status'] == 'applied':
+                return old
             if old['hash'] != body.expected_hash or old['status'] not in ('draft', 'stored_unverified') or old['operation'] == 'rollback':
                 raise PlanError('knowledge_conflict', 'Proposal changed or cannot be edited; reload it.', 409)
+            safe_content(body.text)
             suggestion = KnowledgeSuggestion(category=old['category'], path=old['path'], text=body.text, rationale=body.rationale, artifact_ids=old['artifact_ids'])
             # New immutable draft; retain original base for conflict detection.
             safe_content(body.text)
@@ -165,10 +188,13 @@ class KnowledgeProposals:
             self.save(db, record)
             return record
 
+    @safe_error
     def reject(self, run_id, proposal_id, expected_hash):
         with self.execution.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            record = self.get(db, run_id, proposal_id)
+            record = self.reconcile(db, self.get(db, run_id, proposal_id))
+            if record['hash'] == expected_hash and record['status'] == 'applied':
+                return record
             if record['hash'] != expected_hash or record['status'] not in ('draft', 'stored_unverified', 'rejected'):
                 raise PlanError('knowledge_conflict', 'Proposal changed; reload it.', 409)
             record['status'] = 'rejected'
@@ -182,7 +208,7 @@ class KnowledgeProposals:
             raise PlanError('knowledge_confirmation', 'Explicit approval of the reviewed proposal is required.', 422)
         with self.execution.connect() as db:
             db.execute('BEGIN IMMEDIATE')
-            record = self.get(db, run_id, proposal_id)
+            record = self.reconcile(db, self.get(db, run_id, proposal_id))
             if record['hash'] != body.expected_hash or record['status'] not in ('draft', 'stored_unverified', 'applied'):
                 raise PlanError('knowledge_conflict', 'Proposal changed; reload it.', 409)
             if record['status'] == 'applied':

@@ -255,3 +255,38 @@ def test_two_full_unicode_bundles_fit_final_budget(proposals, long_chat):
     local = [source for key in ['knowledge','sut_knowledge'] for source in (response.json()['facts'].get(key) or {}).get('sources', [])]
     assert {source['id'] for source in local} == {source['id'] for source in sent}
     assert all('text' not in source for source in local)
+
+
+def test_oversize_unicode_edit_returns_422(proposals):
+    store, _, client, _ = proposals
+    proposal = draft(store)
+    response = client.post(f'/api/remote-runs/{RUN}/knowledge-proposals/{proposal["id"]}/edit', json=dict(expected_hash=proposal['hash'], text='界'*3000, rationale='Updated guidance.'))
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'knowledge_content'
+
+
+@pytest.mark.parametrize('operation', ['edit', 'reject', 'approve'])
+def test_mutations_recover_committed_proposal(proposals, monkeypatch, operation):
+    store, _, _, _ = proposals
+    proposal = draft(store)
+    save = store.save
+    def interrupted(db, record):
+        if record['status'] == 'applied':
+            raise OSError('Interrupted DB update')
+        save(db, record)
+    monkeypatch.setattr(store, 'save', interrupted)
+    with pytest.raises(PlanError):
+        approve(store, proposal)
+    monkeypatch.setattr(store, 'save', save)
+    # Recover even if another revision was committed after the interruption.
+    approve(store, draft(store, text='Later reviewed guidance.'))
+    if operation == 'edit':
+        recovered = store.edit(RUN, proposal['id'], DraftEdit(expected_hash=proposal['hash'], text='Edited guidance.', rationale='Changed.'))
+    elif operation == 'reject':
+        recovered = store.reject(RUN, proposal['id'], proposal['hash'])
+    else:
+        recovered = approve(store, proposal)
+    assert recovered['status'] == 'applied'
+    with store.execution.connect() as db:
+        assert store.get(db, RUN, proposal['id'])['status'] == 'applied'
+    assert len(store.history(RUN, 'sut')['revisions']) == 3
