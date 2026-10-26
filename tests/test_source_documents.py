@@ -42,3 +42,51 @@ def test_budget_and_unknown_endpoint():
         extract_operation(snapshot(),'get','/voucher',max_bytes=10)
     with pytest.raises(ValueError):
         extract_operation(snapshot(),'get','/unknown')
+
+
+def parse(document):
+    return json.loads(extract_operation({'path':'spec.json','sha256':'hash','text':json.dumps(document)},'get','/x')['text'])
+
+
+def spec(**extra):
+    return {'openapi':'3.0.0','paths':{'/x':{'get':{'responses':{}}}},**extra}
+
+
+def test_transport_inheritance_and_override():
+    doc=spec(swagger='2.0',host='api.test',basePath='/v2',schemes=['https'],consumes=['application/xml'],produces=['application/xml'])
+    result=parse(doc)
+    assert result['transport']['basePath']=='/v2'
+    assert result['consumes']==['application/xml']
+    doc['paths']['/x']['get']['consumes']=['application/json']
+    assert parse(doc)['consumes']==['application/json']
+
+
+def test_servers_precedence():
+    doc=spec(servers=[{'url':'/root'}])
+    assert parse(doc)['servers']==[{'url':'/root'}]
+    doc['paths']['/x']['servers']=[{'url':'/path'}]
+    assert parse(doc)['servers']==[{'url':'/path'}]
+    doc['paths']['/x']['get']['servers']=[{'url':'/operation'}]
+    assert parse(doc)['servers']==[{'url':'/operation'}]
+
+
+def test_uri_fragment_and_invalid_index():
+    doc=spec(components={'schemas':{'Foo Bar':{'type':'string'}}})
+    doc['paths']['/x']['get']['schema']={'$ref':'#/components/schemas/Foo%20Bar'}
+    assert parse(doc)['references']['#/components/schemas/Foo%20Bar']=={'type':'string'}
+    doc['values']=[{'type':'string'}]
+    for index in ['-1','01','-']:
+        doc['paths']['/x']['get']['schema']={'$ref':'#/values/'+index}
+        with pytest.raises(ValueError):
+            parse(doc)
+
+
+@pytest.mark.parametrize('paths',[None,[]])
+def test_malformed_paths(paths):
+    with pytest.raises(ValueError):
+        parse(spec(paths=paths))
+
+
+def test_json_depth_limit():
+    with pytest.raises(ValueError,match='depth limit'):
+        extract_operation({'path':'x','sha256':'x','text':'['*10000+'0'+']'*10000},'get','/x')
