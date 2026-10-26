@@ -85,3 +85,6 @@ Approved automation/SUT knowledge can be shared independently. AI knowledge
 proposals remain private drafts until exact-content review and explicit approval;
 unverified storage never activates a hypothesis. See the [local knowledge acceptance
 steps and revision/rollback workflow](docs/project-knowledge.md#reviewed-ai-proposals-revisions-and-rollback).
+
+
+Original-source AI context: [configuration, supported formats, consent, planning and local acceptance](docs/source-aware-context.md).

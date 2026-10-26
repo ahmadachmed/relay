@@ -1,6 +1,6 @@
 # Commit-pinned source preview (#29, phase B foundation)
 
-This backend-only read-only capability previews an explicitly approved automation source file. It does not yet retrieve relevant code automatically, feed source to AI, or expose source controls in the UI. Knowledge directory support remains separate.
+This older read-only capability previews one explicitly approved automation source file. For scoped retrieval, planning without a run, AI sharing and citations, see [source-aware AI context](source-aware-context.md). The preview itself remains local and separate from knowledge bundles and AI sharing.
 
 ## Configuration
 
@@ -31,7 +31,7 @@ Only approved relative file paths with ordinary ASCII letters/digits/underscore/
 
 The adapter requests metadata from the saved repository and full commit, verifies file type/path/commit/size/attributes, then reads that same pinned file. Only regular text file metadata (optional executable attribute) is accepted; executable code is still never executed. Link, subrepository, binary, directory, oversized and malformed responses are rejected. Maximum raw file size is 24000 bytes, metadata 6000 bytes, one active request per process, 20-second total deadline, no retries, redirects or environment proxies. UTF-8 and no NUL/private-key markers are required. Credential-bearing remote links are never followed.
 
-The implementation uses direct GETs, not Git checkout, installs or hooks. It creates no source cache, so no disk retention/cleanup is needed here. Authentication/read failures are explicit; returned upstream error bodies and credentials are suppressed. Source IDs are not report artifact citations. Future retrieval/chunk citation integration must separately validate context actually shared with the model.
+The implementation uses direct GETs, not Git checkout, installs or hooks. It creates no source cache, so no disk retention/cleanup is needed here. Authentication/read failures are explicit; returned upstream error bodies and credentials are suppressed. Source IDs are not report artifact citations. The separate source-aware context integration validates citations against content actually shared with the model.
 
 Provider reference: https://developer.atlassian.com/cloud/bitbucket/rest/api-group-source/
 

@@ -135,6 +135,14 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     def assistant_status():
         return {'enabled': os.getenv('RELAY_AI_ENABLED') == '1', 'configured': ai_configured()}
 
+    @app.get('/api/source-registry')
+    def source_registry():
+        return assistant.sources.catalog()
+
+    @app.get('/api/source-manifests/{response_id}')
+    async def source_manifest(response_id: str):
+        return await assistant.sources.manifest(response_id)
+
     @app.post('/api/assistant/chat')
     async def assistant_chat(body: ChatRequest):
         return await assistant.chat(body)
