@@ -90,3 +90,25 @@ def test_malformed_paths(paths):
 def test_json_depth_limit():
     with pytest.raises(ValueError,match='depth limit'):
         extract_operation({'path':'x','sha256':'x','text':'['*10000+'0'+']'*10000},'get','/x')
+
+
+def test_encoded_leading_slash_reference():
+    doc=spec(components={'responses':{'Ok':{'description':'OK'}}})
+    ref='#%2Fcomponents%2Fresponses%2FOk'
+    doc['paths']['/x']['get']['responses']={'200':{'$ref':ref}}
+    assert parse(doc)['references'][ref]=={'description':'OK'}
+
+
+def test_transport_uses_effective_schemes():
+    doc=spec(swagger='2.0',schemes=['http'])
+    doc['paths']['/x']['get']['schemes']=['https']
+    result=parse(doc)
+    assert result['transport']['schemes']==result['schemes']==['https']
+
+
+@pytest.mark.parametrize('ref',['https://example.org/spec.json#/x','#not-a-pointer','#%GG'])
+def test_invalid_fragment_references(ref):
+    doc=spec()
+    doc['paths']['/x']['get']['responses']={'200':{'$ref':ref}}
+    with pytest.raises(ValueError):
+        parse(doc)
