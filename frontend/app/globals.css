@@ -1953,3 +1953,7 @@ html[data-theme="dark"] .message.user .message-avatar {
   min-width: 0;
   margin-top: 12px;
 }
+
+.analysis-context {padding: 12px; font-size: 12px;}
+.analysis-context label {display: block; margin-top: 10px;}
+.analysis-context textarea {display: block; width: 100%; min-height: 90px; resize: vertical; color: inherit; background: var(--paper); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere;}

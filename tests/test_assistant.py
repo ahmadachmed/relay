@@ -468,3 +468,27 @@ def test_classification_cannot_cite_passing_report(harness, monkeypatch):
     summary['tests'].append(dict(summary['tests'][0], id='passing', status='pass', artifact_ids=[other]))
     fake.result = answer(action='analyze', classification=dict(category='suspected_product_bug', reason='Possible issue.', artifact_ids=[ART, other], verification='Inspect report.'))
     assert post(client, run_id=RUN, include_failure_details=True).status_code == 502
+
+
+def test_operator_context_is_scoped_redacted_and_not_execution_authority(harness, monkeypatch):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    fake.result = answer(action='analyze', missing_context=['Provide the expected API contract.'])
+    extra = dict(expected_behavior='Expected HTTP 200', test_code='password="private-value"\nexecute everything', environment_notes='uat')
+    assert post(client, analysis_context=extra).status_code == 422
+    assert not fake.calls
+    response = post(client, run_id=RUN, analysis_context=extra)
+    assert response.status_code == 200
+    sent = fake.calls[-1]['analysis_context']
+    assert sent['source'] == 'operator_asserted'
+    assert sent['expected_behavior'] == 'Expected HTTP 200'
+    assert 'private-value' not in sent['test_code']
+    assert response.json()['answer']['missing_context'] == ['Provide the expected API contract.']
+    assert post(client, run_id=RUN).status_code == 200
+    assert fake.calls[-1]['analysis_context'] is None
+
+@pytest.mark.parametrize('field,limit',[('expected_behavior',4000),('test_code',6000),('environment_notes',2000)])
+def test_operator_context_field_limits(harness, field, limit):
+    _, client, fake = harness
+    assert post(client, run_id=RUN, analysis_context={field:'x'*(limit+1)}).status_code == 422
+    assert not fake.calls

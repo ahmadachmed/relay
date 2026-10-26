@@ -856,3 +856,33 @@ test('bug report preserves multiline text, wraps long evidence and never renders
  await expect(text).toBeVisible();
  expect(await text.textContent()).toBe(draft);
 });
+
+test('additional analysis context is opt-in and isolated between runs', async ({page})=>{
+ await fixtures(page,true);
+ const other='c'.repeat(32);
+ await page.route(/\/api\/remote-runs\?/,r=>r.fulfill({json:[run,{...run,id:other}]}));
+ await page.route(`**/api/remote-runs/${other}`,r=>r.fulfill({json:{...run,id:other}}));
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ const requests:any[]=[];
+ await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'analyze',message:'Review.',selection:null,hypotheses:[],bug_report_draft:null,missing_context:['Provide contract version.']},run_id:r.request().postDataJSON().run_id,facts:null,limitations:[]}});});
+ await page.goto('/ui/');
+ await page.locator('.history-item').first().click();
+ await page.getByText('Analysis context for this run',{exact:true}).click();
+ const expected=page.getByLabel('Expected behavior / acceptance criteria');
+ await expected.fill('Expected HTTP 200');
+ const send=async()=>{const n=requests.length;await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');await page.getByRole('button',{name:'Send command'}).click();await expect.poll(()=>requests.length).toBe(n+1);await expect(page.getByRole('textbox',{name:'Structured command'})).toBeEnabled();await expect(page.getByText('Provide contract version.',{exact:true})).toBeVisible();};
+ await send();expect(requests[0].analysis_context).toBeNull();
+ await page.getByLabel('Include this run’s additional context in AI requests').check();
+ await send();expect(requests[1].analysis_context.expected_behavior).toBe('Expected HTTP 200');
+ await page.locator('.history-item').nth(1).click();
+ await page.getByText('Analysis context for this run',{exact:true}).click();
+ await expect(expected).toHaveValue('');
+ await send();expect(requests[2].analysis_context).toBeNull();
+ await page.locator('.history-item').first().click();
+ await page.getByText('Analysis context for this run',{exact:true}).click();
+ await expect(expected).toHaveValue('Expected HTTP 200');
+ await page.reload();
+ await page.getByText('Analysis context for this run',{exact:true}).click();
+ await expect(expected).toHaveValue('');
+ await expect(page.getByLabel('Include this run’s additional context in AI requests')).not.toBeChecked();
+});
