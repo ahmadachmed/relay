@@ -39,19 +39,24 @@ class SourceRetrieval:
                     snapshot = read_local(source, path, max_bytes=allowance, byte_counter=count_bytes)
                     if source.format == 'openapi':
                         # Use the bounded extractor for explicit method/path questions.
-                        match = re.search(r'\b(get|post|put|patch|delete|head|options|trace)\s+(/[^\s]+)', query, re.I)
+                        match = re.search(r'\b(get|post|put|patch|delete|head|options|trace)\s+(/[^\s]*)', query, re.I)
                         if not match:
                             diagnostics.append('OpenAPI retrieval requires an explicit method and path.')
                             continue
                         endpoint = match[2]
-                        # Prefer the literal path; only retry prose delimiters on lookup failure.
-                        try:
-                            section = extract_operation(snapshot, match[1], endpoint, budget)
-                        except ValueError as exc:
-                            if str(exc) != 'Operation unavailable':
-                                raise
-                            endpoint = endpoint.rstrip('`.,;!?)]}')
-                            section = extract_operation(snapshot, match[1], endpoint, budget)
+                        # Try the literal path, then remove one prose delimiter at a time.
+                        # Stop at the first matching operation so literal suffixes survive.
+                        for attempt in range(16):
+                            try:
+                                section = extract_operation(snapshot, match[1], endpoint, budget)
+                                break
+                            except ValueError as exc:
+                                if (str(exc) != 'Operation unavailable' or not endpoint
+                                        or endpoint[-1] not in '`.,;!?)]}'):
+                                    raise
+                                endpoint = endpoint[:-1]
+                        else:
+                            raise ValueError('Endpoint delimiter limit exceeded')
                     else:
                         section = dict(snapshot, selector='whole document', parser_version='text-v1')
                     score = len(terms & set(re.findall(r'[a-z0-9_]+', (path+' '+section['selector']+' '+section['text']).lower())))

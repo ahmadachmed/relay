@@ -65,10 +65,16 @@ def test_missing_files_do_not_consume_byte_budget(tmp_path):
 
 
 def test_endpoint_prose_delimiters_and_literal_path(tmp_path):
-    paths = {path: {'get': {'responses': {'200': {'description': 'OK'}}}} for path in ['/voucher', '/voucher.']}
+    paths = {path: {'get': {'responses': {'200': {'description': 'OK'}}}} for path in ['/', '/voucher', '/voucher.', '/voucher/{id}']}
     (tmp_path / 'spec.json').write_text(json.dumps({'openapi': '3.0.0', 'paths': paths}))
     registry = SourceRegistry.model_validate({'sources': {'api': dict(category='sut', scope_id='service', environments=['uat'], provider='local', location=str(tmp_path), files=['spec.json'], format='openapi')}})
     reader = SourceRetrieval(registry)
     for query in ['Jelaskan `GET /voucher`', 'Jelaskan GET /voucher, lalu response-nya']:
         assert reader.retrieve('sut', 'service', 'uat', query)['sources'][0]['selector'] == 'GET /voucher'
     assert reader.retrieve('sut', 'service', 'uat', 'GET /voucher.')['sources'][0]['selector'] == 'GET /voucher.'
+
+
+    for endpoint in ['/', '/voucher/{id}', '/voucher.']:
+        for query in [f'GET {endpoint}', f'Jelaskan `GET {endpoint}`', f'Jelaskan GET {endpoint}, lalu response-nya', f'(GET {endpoint})']:
+            result = reader.retrieve('sut', 'service', 'uat', query)
+            assert result['sources'][0]['selector'] == f'GET {endpoint}'
