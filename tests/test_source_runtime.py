@@ -475,3 +475,36 @@ def test_missing_dependency_is_unavailable(harness):
     (root/'schema.json').unlink()
     result=client.get('/api/source-manifests/'+manifest['id']).json()
     assert result['sources'][0]['freshness']=='unavailable'
+
+
+
+def test_index_limit_is_deterministic_across_hash_seeds():
+    import os
+    import subprocess
+    import sys
+    code = r"""
+import asyncio, json
+from types import SimpleNamespace
+from unittest.mock import patch
+from relay.source_registry import SourceRegistry
+from relay.source_runtime import SourceSession
+registry = SourceRegistry.model_validate({'limits':{'sections':1}, 'sources':{'contract':dict(category='sut',scope_id='service-a',environments=['uat'],provider='local',location='/synthetic',files=['spec.json'],format='openapi')}})
+class Service:
+    registry = lambda self: registry
+    authorize = lambda self, r, key, identity: r.sources[key].model_copy(deep=True)
+    fingerprint = lambda self, source: 'synthetic-config'
+spec={'openapi':'3.0.0','paths':{'/voucher':{method:{'responses':{}} for method in ['post','get']}}}
+def reader(*args, **kwargs):
+    return {'path':'spec.json','sha256':'hash','text':json.dumps(spec)}
+async def main():
+    session=SourceSession(Service(),{'mode':'planning'},['contract'])
+    with patch('relay.source_runtime.read_local',reader):
+        await session.load()
+    print(json.dumps([s['selector'] for s in session.sections.values()]))
+asyncio.run(main())
+"""
+    outputs=[]
+    for seed in ('1','2','3','4'):
+        result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'PYTHONHASHSEED':seed},capture_output=True,text=True,check=True,timeout=15)
+        outputs.append(json.loads(result.stdout))
+    assert outputs == [['GET /voucher']]*4

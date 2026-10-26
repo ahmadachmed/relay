@@ -362,7 +362,7 @@ class SourceSession:
                                 continue
                             if not isinstance(item, dict):
                                 continue
-                            for method in METHODS & item.keys():
+                            for method in sorted(METHODS & item.keys()):
                                 operation = item[method]
                                 if not isinstance(operation, dict):
                                     continue
