@@ -44,6 +44,7 @@ type Context = {
 type AiReply = {
   run_id: string | null;
   answer: {
+    missing_context?: string[];
     classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
     action: "clarify" | "propose" | "analyze" | "cancel";
     message: string;
@@ -145,6 +146,12 @@ export default function Workspace() {
   });
   const [runs, setRuns] = useState<Run[]>([]);
   const [selected, setSelected] = useState("");
+  type AnalysisInput = {expected_behavior: string; test_code: string; environment_notes: string; share: boolean};
+  const [analysisInputs, setAnalysisInputs] = useState<Record<string, AnalysisInput>>({});
+  const analysisInput = analysisInputs[selected] || {expected_behavior:"", test_code:"", environment_notes:"", share:false};
+  function updateAnalysisInput(next: Partial<AnalysisInput>) {
+    setAnalysisInputs(old => ({...old, [selected]: {...analysisInput, ...next}}));
+  }
   const aiReply = replies[selected || "planning"] || null;
   const [run, setRun] = useState<Run | null>(null);
   const [evidence, setEvidence] = useState<Evidence | null>(null);
@@ -623,6 +630,7 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
+        analysis_context: selected && analysisInput.share ? {expected_behavior:analysisInput.expected_behavior, test_code:analysisInput.test_code, environment_notes:analysisInput.environment_notes} : null,
         previous_proposal: proposals.current[conversationKey] || null,
         context: project?.enabled && pipeline && context.branch
           ? {
@@ -995,6 +1003,7 @@ export default function Workspace() {
                     </p>
                   </details>
                 )}
+                {Boolean(aiReply.answer.missing_context?.length) && <section aria-label="Missing analysis context"><h3>Context needed</h3><ul>{aiReply.answer.missing_context!.map((item,i)=><li key={i}>{item}</li>)}</ul></section>}
                 {aiReply.answer.classification && <section aria-label="Failure classification">
                   <h3>Failure classification — unverified</h3>
                   <strong>{{suspected_product_bug: "Suspected product bug", suspected_automation_bug: "Suspected automation bug", environment_infrastructure: "Environment / infrastructure", inconclusive: "Inconclusive"}[aiReply.answer.classification.category]}</strong>
@@ -1459,6 +1468,13 @@ export default function Workspace() {
             <X size={16} />
           </button>
         </div>
+          {aiEnabled && selected && <details className="analysis-context" key={selected}>
+            <summary>Analysis context for this run</summary>
+            <p>Optional operator-provided context, not verified report evidence. These inputs stay in page memory and reset on reload. Included only when sharing below is enabled; existing AI sharing settings also apply.</p>
+            {([['expected_behavior','Expected behavior / acceptance criteria',4000],['test_code','Relevant test / keyword / assertion code',6000],['environment_notes','Environment notes',2000]] as const).map(([field,label,limit])=><label key={field}>{label}<textarea value={analysisInput[field]} maxLength={limit} disabled={Boolean(busy)} onChange={e=>updateAnalysisInput({[field]:e.target.value})}/></label>)}
+            <label><input type="checkbox" checked={analysisInput.share} disabled={Boolean(busy)} onChange={e=>updateAnalysisInput({share:e.target.checked})}/>Include this run’s additional context in AI requests</label>
+            <button disabled={Boolean(busy)} onClick={()=>updateAnalysisInput({expected_behavior:"",test_code:"",environment_notes:"",share:false})}>Clear analysis context</button>
+          </details>}
           {aiEnabled && (
             <details className="ai-sharing"><summary>Settings · AI context sharing</summary><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
               <label>
