@@ -6,14 +6,14 @@ This foundation does not read files or grant model sharing consent.
 import re
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 from .contracts import Contract, Name, SutId, Value, sensitive_source_component
 
 
 class Source(Contract):
     category: Literal['automation', 'sut']
-    scope_id: Name
+    scope_id: str = Field(min_length=1, max_length=100)
     environments: list[Value] = Field(min_length=1, max_length=32)
     provider: Literal['local', 'bitbucket']
     location: str = Field(min_length=1, max_length=1000, exclude=True)
@@ -39,8 +39,7 @@ class Source(Contract):
 
     @model_validator(mode='after')
     def valid_location(self):
-        if self.category == 'sut' and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', self.scope_id):
-            raise ValueError('invalid SUT scope')
+        TypeAdapter(SutId if self.category == 'sut' else Name).validate_python(self.scope_id)
         if '\x00' in self.location:
             raise ValueError('invalid source location')
         if len(set(self.environments)) != len(self.environments):
