@@ -119,7 +119,7 @@ export default function Workspace() {
   const [shareAi, setShareAi] = useState(true);
   const [shareFailures, setShareFailures] = useState(true);
   const [shareSutKnowledge, setShareSutKnowledge] = useState(false);
-  const [savedSut, setSavedSut] = useState<string | null>(null);
+  const [savedSut, setSavedSut] = useState<string | null | undefined>(undefined);
   const [shareKnowledge, setShareKnowledge] = useState(false);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [replies, setReplies] = useState<Record<string, AiReply | null>>({});
@@ -364,7 +364,7 @@ export default function Workspace() {
     setPlan(null);
     setError("");
     setRun(null);
-    setSavedSut(null);
+    setSavedSut(undefined);
     setEvidence(null);
     setRunError("");
     setEvidenceError("");
@@ -406,10 +406,18 @@ export default function Workspace() {
 
   const loadEvidence = useCallback(async (id: string) => {
     try {
-      const [value, savedPlan] = await Promise.all([
+      const [evidenceResult, planResult] = await Promise.allSettled([
         api<Evidence>(`/api/remote-runs/${encodeURIComponent(id)}/evidence`),
         api<Plan>(`/api/plans/${encodeURIComponent(id)}`),
       ]);
+      if (activeRun.current !== id) return;
+      if (planResult.status === "fulfilled") {
+        setSavedSut(planResult.value.plan.sut_id || null);
+      }
+      if (evidenceResult.status === "rejected") throw evidenceResult.reason;
+      if (planResult.status === "rejected") throw planResult.reason;
+      const value = evidenceResult.value;
+      const savedPlan = planResult.value;
       if (activeRun.current === id) {
         setSavedSut(savedPlan.plan.sut_id || null);
         setEvidence(value);
@@ -985,6 +993,7 @@ export default function Workspace() {
                           changeContext({
                             project: s.project_id,
                             pipeline: s.pipeline_id,
+                            sut_id: s.project_id === context.project && registry?.projects[s.project_id]?.pipelines[s.pipeline_id]?.sut_ids?.includes(context.sut_id || "") ? context.sut_id : null,
                             branch: s.branch,
                             parameters: s.parameters,
                           });
@@ -1523,7 +1532,7 @@ export default function Workspace() {
             </details>
           )}
 
-        {selected && <p aria-label="Selected run SUT">Selected run SUT: {savedSut || "None"}</p>}
+        {selected && <p aria-label="Selected run SUT">Selected run SUT: {savedSut === undefined ? "Unknown" : savedSut || "None"}</p>}
         <p className="context-description">
           Execution selection for a new plan. Analysis uses the selected run’s saved project and commit.
         </p>

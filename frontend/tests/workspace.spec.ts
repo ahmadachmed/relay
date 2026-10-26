@@ -935,3 +935,26 @@ test('SUT selection is explicit, previewed and reset for another pipeline', asyn
  await page.getByRole('combobox',{name:'Pipeline',exact:true}).selectOption('smoke');
  await expect(sut).toHaveValue('');
 });
+
+test('review35: SUT remains visible when evidence is unavailable',async({page})=>{
+ await fixtures(page,true);
+ await page.route(`**/api/plans/${id}`,r=>r.fulfill({json:{...pinned,plan:{...pinned.plan,sut_id:'service-a'}}}));
+ await page.route(`**/api/remote-runs/${id}/evidence`,r=>r.fulfill({status:503,json:{detail:'Evidence unavailable'}}));
+ await page.goto('/ui/');
+ await page.locator('.history-item').first().click();
+ await expect(page.getByLabel('Selected run SUT')).toContainText('service-a');
+});
+
+test('review35: AI proposal preserves unchanged SUT',async({page})=>{
+ await fixtures(page);
+ await page.route('**/api/project-registry',r=>r.fulfill({json:{projects:{api:{...project,pipelines:{smoke:{selector:'smoke-tests',parameters,sut_ids:['service-a']}}}}}}));
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ await page.route('**/api/assistant/chat',r=>r.fulfill({json:{run_id:null,facts:null,limitations:[],answer:{action:'propose',message:'Change environment.',selection:{project_id:'api',pipeline_id:'smoke',branch:'main',parameters:{ENV:'dev',TAGS:'smoke'}},hypotheses:[],bug_report_draft:null}}}));
+ await page.goto('/ui/');
+ const sut=page.getByRole('combobox',{name:'System under test'});
+ await sut.selectOption('service-a');
+ await page.getByRole('textbox',{name:'Structured command'}).fill('change environment to dev');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await page.getByRole('button',{name:'Use proposed context'}).click();
+ await expect(sut).toHaveValue('service-a');
+});
