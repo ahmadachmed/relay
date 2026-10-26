@@ -1,0 +1,41 @@
+{
+  "limits": {
+    "files": 16,
+    "read_bytes": 2000000,
+    "sections": 256,
+    "candidates": 8,
+    "context_bytes": 20000,
+    "model_rounds": 3,
+    "model_input_bytes": 100000,
+    "wall_seconds": 40
+  },
+  "sources": {
+    "service-contract": {
+      "category": "sut",
+      "scope_id": "service-a",
+      "environments": ["uat"],
+      "provider": "local",
+      "location": "/absolute/private/service-a",
+      "files": ["swagger.json", "schemas/voucher.json"],
+      "format": "openapi"
+    },
+    "service-rules": {
+      "category": "sut",
+      "scope_id": "service-a",
+      "environments": ["uat"],
+      "provider": "local",
+      "location": "/absolute/private/service-a",
+      "directories": ["docs"],
+      "format": "markdown"
+    },
+    "api-automation": {
+      "category": "automation",
+      "scope_id": "api",
+      "environments": ["uat"],
+      "provider": "bitbucket",
+      "location": "example/api-automation",
+      "files": ["tests/test_voucher.py", "helpers/voucher.py"],
+      "format": "automation"
+    }
+  }
+}

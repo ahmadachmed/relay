@@ -19,3 +19,4 @@ frontend/test-results/
 
 # Private local knowledge files
 /project-context/
+/sources.local.json

@@ -106,3 +106,8 @@ shared failure evidence. The model may return `knowledge_suggestion: null`.
 Unrequested proposals are rejected. Model responses can never approve/apply a
 draft; those are separate local operator actions. See [knowledge workflow and
 local acceptance](project-knowledge.md#reviewed-ai-proposals-revisions-and-rollback).
+
+
+## Original sources and planning references
+
+See [source-aware context](source-aware-context.md) for the independent feature flag, source registry, opt-in sharing, planning without runs, typed bounded follow-up retrieval, citations and freshness. Source-reference answers use action `answer`; only saved-run analysis uses `analyze`. Source handles are not report artifact IDs. This feature does not enable execution or automatic knowledge activation.

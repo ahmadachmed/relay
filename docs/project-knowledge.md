@@ -1,3 +1,5 @@
+> Original Swagger, docs and automation retrieval now has a separate opt-in path: [source-aware context](source-aware-context.md). Curated bundles retain their existing approval and size rules. Planning can use curated references with a validated project/SUT/environment selection; report-derived proposals still require a run.
+
 # Private project knowledge (issue #29, first delivery)
 
 Analysis uses the selected run's saved plan identity (project, framework, repository, branch and commit). The execution dropdown is a prospective plan selection and is not the analyzed run identity. Repository source retrieval is not implemented in this delivery.

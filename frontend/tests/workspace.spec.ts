@@ -896,9 +896,9 @@ test('project knowledge is opt-in, persisted and shows saved run provenance', as
  await page.goto('/ui/');
  await page.locator('.history-item').first().click();
  await page.getByText('Settings · AI context sharing',{exact:true}).click();
- const sharing=page.getByLabel('Include approved automation knowledge for the selected run');
+ const sharing=page.getByLabel('Include approved automation knowledge for planning or the selected run');
  await expect(sharing).not.toBeChecked();
- const sutSharing=page.getByLabel('Include approved SUT knowledge for the selected run');
+ const sutSharing=page.getByLabel('Include approved SUT knowledge for planning or the selected run');
  await expect(sutSharing).not.toBeChecked();
  await sharing.check();await sutSharing.check();
  await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');
@@ -979,7 +979,7 @@ test('knowledge drafts require exact review, separate verification and expose ro
  await page.route('**/knowledge-rollback',r=>{expect(r.request().postDataJSON().expected_hash).toBe('d'.repeat(64));drafts=[{...proposal,id:'rollback',path:null,operation:'rollback',text:'',diff:'Rollback reviewed bundle.',hash:'f'.repeat(64)}];return r.fulfill({json:drafts[0]});});
  await page.goto('/ui/');await page.locator('.history-item').first().click();
  await page.getByText('Settings · AI context sharing',{exact:true}).click();
- await page.getByLabel('Include approved SUT knowledge for the selected run').check();
+ await page.getByLabel('Include approved SUT knowledge for planning or the selected run').check();
  await page.getByRole('button',{name:'Suggest knowledge from this run'}).click();
  await page.getByRole('button',{name:'Retry AI message'}).click();
  await page.getByText('Knowledge proposals and history',{exact:true}).click();
@@ -1026,4 +1026,66 @@ for (const operation of ['reject','edit']) test(`recovered apply on ${operation}
  await expect(page.getByText('Applied revision: new-revision. Earlier analysis provenance remains unchanged.')).toBeVisible();
  await expect(page.getByText('Observed report summary',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:/Review rollback to/})).toHaveCount(0);
+});
+
+const sourceFixture = {
+  id:"c".repeat(32),identity:{mode:"planning",project_id:"api",sut_id:"service-a",environment:"uat",commit:null},
+  sources:[{handle:"d".repeat(32),source_id:"contract",category:"sut",path:"swagger.json",selector:"GET /voucher/{id}",sha256:"a".repeat(64),shared_sha256:"b".repeat(64),commit:null,parser_version:"openapi-operation-v1"}],
+  diagnostics:["SUT deployed version is unknown."],replay:"Metadata only; source bytes are not archived."
+};
+async function sourceFixtures(page:Page, history=false) {
+  await fixtures(page,history);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route('**/api/project-registry',r=>r.fulfill({json:{projects:{api:{...project,pipelines:{smoke:{selector:'smoke-tests',parameters,sut_ids:['service-a']}}}}}}));
+  await page.route('**/api/source-registry',r=>r.fulfill({json:{enabled:true,sources:[{id:'contract',category:'sut',scope_id:'service-a',environments:['uat'],provider:'local',format:'openapi',revision:'current request snapshot'}]}}));
+}
+test('source planning without a run has independent opt-in, citations and freshness',async({page})=>{
+  await sourceFixtures(page);
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{source_manifest:sourceFixture,run_id:null,facts:null,limitations:[],answer:{action:'answer',message:'Voucher contract from approved references.',selection:null,hypotheses:[],bug_report_draft:null,source_citations:[{handle:'d'.repeat(32),claim:'Voucher schema reference.'}]}}});});
+  await page.route('**/api/source-manifests/*',r=>r.fulfill({json:{...sourceFixture,sources:sourceFixture.sources.map(s=>({...s,freshness:'changed'}))}}));
+  await page.goto('/ui/');
+  await page.getByRole('combobox',{name:'System under test'}).selectOption('service-a');
+  await page.getByText('Original sources · planning and analysis',{exact:true}).click();
+  const consent=page.getByLabel('Share selected original sources with AI');
+  await expect(consent).not.toBeChecked();
+  await page.getByLabel('contract · sut/service-a',{exact:false}).check();
+  await consent.check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('GET /voucher/{id}');
+  await page.getByRole('button',{name:'Send command'}).click();
+  const references=page.getByRole('region',{name:'Original source references'});
+  await expect(references).toContainText('swagger.json');
+  expect(requests[0].run_id).toBeNull();
+  expect(requests[0].context.sut_id).toBe('service-a');
+  expect(requests[0].source_ids).toEqual(['contract']);
+  expect(requests[0].include_source_context).toBe(true);
+  expect(requests[0].include_sut_knowledge).toBe(false);
+  await page.getByRole('button',{name:'Check source freshness'}).click();
+  await expect(references).toContainText('changed');
+  await consent.uncheck();
+  await expect(references).toHaveCount(0);
+  await expect(page.getByLabel('QA conversation history')).not.toContainText('Voucher contract from approved references.');
+  await page.getByLabel('ENV',{exact:true}).selectOption('dev');
+  await expect(page.getByLabel('contract · sut/service-a',{exact:false})).toHaveCount(0);
+});
+test('source response from an earlier planning selection is fenced after run switch',async({page})=>{
+  await sourceFixtures(page,true);
+  let release:()=>void=()=>{};
+  const barrier=new Promise<void>(resolve=>{release=resolve;});
+  let started=false;
+  await page.route('**/api/assistant/chat',async r=>{started=true;await barrier;await r.fulfill({json:{source_manifest:sourceFixture,run_id:null,facts:null,limitations:[],answer:{action:'answer',message:'Stale source answer.',selection:null,hypotheses:[],bug_report_draft:null}}});});
+  await page.goto('/ui/');
+  await page.getByRole('combobox',{name:'System under test'}).selectOption('service-a');
+  await page.getByText('Original sources · planning and analysis',{exact:true}).click();
+  await page.getByLabel('contract · sut/service-a',{exact:false}).check();
+  await page.getByLabel('Share selected original sources with AI').check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('GET /voucher/{id}');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>started).toBe(true);
+  await page.locator('.history-item').first().click();
+  release();
+  await expect(page.getByLabel('Share selected original sources with AI')).toBeEnabled();
+  await expect(page.getByRole('region',{name:'Original source references'})).toHaveCount(0);
+  await expect(page.getByText('Stale source answer.',{exact:true})).toHaveCount(0);
+  await expect(page.getByLabel('Share selected original sources with AI')).not.toBeChecked();
 });

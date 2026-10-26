@@ -35,6 +35,7 @@ import {
   type Run,
 } from "../lib/api";
 
+import { SourceControls, SourceReferences, type SourceEntry, type SourceManifest } from "./SourceContext";
 import KnowledgeReview from "./KnowledgeReview";
 
 type Knowledge = {sources:{id:string;source_repository?:string;source_path?:string;source_commit?:string;category?:string;scope_id?:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]};
@@ -46,11 +47,14 @@ type Context = {
   parameters: Record<string, string>;
 };
 type AiReply = {
+  source_manifest?: SourceManifest | null;
+  planning_knowledge?: {automation:Knowledge|null;sut:Knowledge|null} | null;
   run_id: string | null;
   answer: {
+    source_citations?: {handle:string;claim:string}[];
     missing_context?: string[];
     classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
-    action: "clarify" | "propose" | "analyze" | "cancel";
+    action: "clarify" | "propose" | "analyze" | "cancel" | "answer";
     message: string;
     selection: {
       project_id: string;
@@ -117,6 +121,12 @@ function errorText(error: unknown) {
 }
 
 export default function Workspace() {
+  const [sourceCatalog,setSourceCatalog] = useState<SourceEntry[]>([]);
+  const [sourceEnabled,setSourceEnabled] = useState(false);
+  const [sourceIds,setSourceIds] = useState<string[]>([]);
+  const [shareSources,setShareSources] = useState(false);
+  const [savedSourceIdentity,setSavedSourceIdentity] = useState<{project:string;sut:string|null;environment:string|null}|null>(null);
+  useEffect(()=>{void api<{enabled:boolean;sources:SourceEntry[]}>("/api/source-registry").then(value=>{setSourceEnabled(value.enabled);setSourceCatalog(value.sources);}).catch(()=>setSourceEnabled(false));},[]);
   const [knowledgeRefresh, setKnowledgeRefresh] = useState(0);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [shareAi, setShareAi] = useState(true);
@@ -363,11 +373,13 @@ export default function Workspace() {
   useEffect(() => {
     setAiError(null);
     activeRun.current = selected;
+    setShareSources(false); setSourceIds([]);
     revision.current++;
     setPlan(null);
     setError("");
     setRun(null);
     setSavedSut(undefined);
+    setSavedSourceIdentity(null);
     setEvidence(null);
     setRunError("");
     setEvidenceError("");
@@ -416,6 +428,9 @@ export default function Workspace() {
       if (activeRun.current !== id) return;
       if (planResult.status === "fulfilled") {
         setSavedSut(planResult.value.plan.sut_id || null);
+        const p = planResult.value.plan;
+        const keys = Object.entries(p.project.pipelines[p.pipeline_id].parameters).filter(([,spec])=>spec.kind === "environment").map(([key])=>key);
+        setSavedSourceIdentity({project:p.project_id,sut:p.sut_id || null,environment:keys.length===1?p.parameters[keys[0]] || null:null});
       }
       if (evidenceResult.status === "rejected") throw evidenceResult.reason;
       if (planResult.status === "rejected") throw planResult.reason;
@@ -444,6 +459,10 @@ export default function Workspace() {
   }, [selected, loadEvidence]);
 
   function changeContext(next: Context) {
+    if (shareSources) {
+      setShareSources(false); setSourceIds([]);
+      setConversations(old=>({...old,[selected || "planning"]:[]}));
+    }
     setAiError(null);
     revision.current++;
     proposals.current[selected || "planning"] = null;
@@ -657,13 +676,17 @@ export default function Workspace() {
         message: text,
         propose_knowledge: proposeKnowledge,
         share_context: true,
+        include_source_context: shareSources,
+        source_ids: sourceIds,
+
         include_failure_details: shareFailures,
-        include_automation_knowledge: Boolean(selected) && shareKnowledge,
-        include_sut_knowledge: Boolean(selected) && shareSutKnowledge,
+        include_automation_knowledge: shareKnowledge,
+        include_sut_knowledge: shareSutKnowledge,
         analysis_context: selected && analysisInput.share ? {expected_behavior:analysisInput.expected_behavior, test_code:analysisInput.test_code, environment_notes:analysisInput.environment_notes} : null,
         previous_proposal: proposals.current[conversationKey] || null,
         context: project?.enabled && pipeline && context.branch
           ? {
+              sut_id: context.sut_id || null,
               project_id: context.project,
               pipeline_id: context.pipeline,
               branch: context.branch,
@@ -976,6 +999,9 @@ export default function Workspace() {
                 </div>
               </div>
               <div className="ai-body">
+                {aiReply.source_manifest && <SourceReferences key={aiReply.source_manifest.id} manifest={aiReply.source_manifest} citations={aiReply.answer.source_citations || []}/>}
+                {aiReply.planning_knowledge && <section aria-label="Planning knowledge"><h3>Planning references</h3><p>Reference knowledge, not observed run evidence.</p>{Object.entries(aiReply.planning_knowledge).map(([category,bundle])=>bundle && <div key={category}><strong>{category}</strong><ul>{bundle.sources.map(source=><li key={source.id}>{source.path} · SHA256 {source.sha256}</li>)}{bundle.diagnostics.map((d,i)=><li key={i}>{d}</li>)}</ul></div>)}</section>}
+
                 {aiReply.answer.action === "propose" &&
                   aiReply.answer.selection && (
                     <>
@@ -1509,14 +1535,19 @@ export default function Workspace() {
             <label><input type="checkbox" checked={analysisInput.share} disabled={Boolean(busy)} onChange={e=>updateAnalysisInput({share:e.target.checked})}/>Include this run’s additional context in AI requests</label>
             <button disabled={Boolean(busy)} onClick={()=>updateAnalysisInput({expected_behavior:"",test_code:"",environment_notes:"",share:false})}>Clear analysis context</button>
           </details>}
+          {aiEnabled && <SourceControls enabled={sourceEnabled} sources={sourceCatalog.filter(source=>{
+            const identity = selected ? savedSourceIdentity : {project:context.project,sut:context.sut_id || null,environment:Object.entries(pipeline?.parameters || {}).filter(([,p])=>p.kind==="environment").length===1?context.parameters[Object.entries(pipeline?.parameters || {}).find(([,p])=>p.kind==="environment")![0]]:null};
+            return identity && source.scope_id === (source.category==="sut"?identity.sut:identity.project) && source.environments.includes(identity.environment || "");
+          })} selected={sourceIds} consent={shareSources} busy={Boolean(busy)} onChange={(ids,consent)=>{revision.current++;setSourceIds(ids);setShareSources(consent);setReplies({});setConversations({});setAiError(null);}}/>}
           {aiEnabled && (
-            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
+            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for planning or the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for planning or the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
               <label>
                 <input
                   type="checkbox"
                   checked={shareAi}
                   disabled={Boolean(busy)}
                   onChange={(e) => {
+                    revision.current++; setReplies({}); setConversations({}); setAiError(null);
                     setShareAi(e.target.checked);
 
                   }}
@@ -1529,7 +1560,7 @@ export default function Workspace() {
                   type="checkbox"
                   checked={shareFailures}
                   disabled={Boolean(busy)}
-                  onChange={(e) => setShareFailures(e.target.checked)}
+                  onChange={(e) => {revision.current++;setReplies({});setConversations({});setAiError(null);setShareFailures(e.target.checked);}}
                 />
                 Include failure names/messages (best-effort redaction; verify
                 sensitive content first)

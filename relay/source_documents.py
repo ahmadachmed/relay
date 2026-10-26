@@ -40,9 +40,8 @@ def extract_operation(snapshot, method, path, max_bytes=20000):
         raise ValueError("Invalid API structure") from None
 
 
-def _extract_operation(snapshot, method, path, max_bytes):
+def parse_data(text):
     # JSON first avoids YAML implicit scalar conversion for ordinary JSON specs.
-    text = snapshot['text']
     # Bound syntax depth before either parser builds a Python object graph.
     depth = 0
     for count, event in enumerate(yaml.parse(text)):
@@ -58,8 +57,18 @@ def _extract_operation(snapshot, method, path, max_bytes):
         document = json.loads(text)
     except json.JSONDecodeError:
         document = yaml.safe_load(text)
+    return document
+
+
+def parse_document(text):
+    document = parse_data(text)
     if not isinstance(document, dict) or not (document.get('swagger') == '2.0' or str(document.get('openapi', '')).startswith(('3.0.', '3.1.'))):
         raise ValueError('Unsupported API specification')
+    return document
+
+
+def _extract_operation(snapshot, method, path, max_bytes, document=None):
+    document = parse_document(snapshot['text']) if document is None else document
     paths = document.get('paths', {})
     if not isinstance(paths, dict):
         raise ValueError('Invalid API paths')
