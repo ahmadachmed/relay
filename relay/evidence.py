@@ -20,10 +20,12 @@ def report_readiness(artifacts, tests):
         ('missing', None, 'Upload the missing configured report.'),
         ('expired', None, 'Report retention expired; evidence is no longer available.'),
         ('available', 'failed', 'A report failed parsing; inspect the report format and parser error.'),
-        ('available', 'unsupported', 'A report format is unsupported; use Robot XML or JUnit XML.'),
+        ('available', 'unsupported', 'A report format is unsupported; use Robot XML, JUnit XML or an Allure test-result JSON file.'),
     ):
         if any(a.get('availability') == availability and (parse_status is None or a.get('parse_status') == parse_status) for a in artifacts):
             limitations.append(message)
+    if any(a.get('format') == 'allure_json' for a in artifacts):
+        limitations.append('Allure result files represent individual test executions; full launch coverage, containers, attachments and retries are not verified.')
     if not ready:
         limitations.append('No usable parsed test results; provide a supported report for this run.')
     return dict(analysis_ready=ready, evidence_complete=ready and not limitations,
@@ -59,7 +61,7 @@ class EvidenceStore:
             source='manual_upload', association='operator_asserted', uploaded_at=time.time(),
             parse_status='unsupported', error=None)
         results = []
-        if spec['format'] in ('robot_xml', 'junit_xml'):
+        if spec['format'] in ('robot_xml', 'junit_xml', 'allure_json'):
             try:
                 results = parse_report(body, spec['format'], artifact_id)
                 metadata['parse_status'] = 'parsed'
@@ -94,7 +96,7 @@ class EvidenceStore:
             artifacts.append(metadata)
             present.add(path)
             tests.extend(json.loads(result))
-            if metadata['parse_status'] != 'parsed' or not available:
+            if metadata['parse_status'] != 'parsed' or not available or metadata.get('format') == 'allure_json':
                 incomplete = True
         for spec in plan['plan']['project']['reports']:
             if spec['path'] not in present:
