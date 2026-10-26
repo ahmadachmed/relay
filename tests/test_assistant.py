@@ -518,3 +518,21 @@ def test_saved_identity_and_knowledge_consent(tmp_path,harness,monkeypatch):
     before=len(fake.calls)
     assert post(client,include_project_knowledge=True).status_code==422
     assert len(fake.calls)==before
+
+
+def test_separate_knowledge_consent_and_missing_sut(harness, monkeypatch, tmp_path):
+    from test_knowledge import provision
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    provision(tmp_path, monkeypatch)
+    fake.result = answer(action='analyze')
+    result = post(client, run_id=RUN, include_project_knowledge=True, include_automation_knowledge=False, include_sut_knowledge=True)
+    assert result.status_code == 200
+    assert fake.calls[-1]['project_knowledge'] is None
+    assert not fake.calls[-1]['sut_knowledge']['sources']
+    assert 'no SUT identity' in result.json()['facts']['sut_knowledge']['diagnostics'][0]
+    assert post(client, include_sut_knowledge=True).status_code == 422
+    assert post(client, include_automation_knowledge=True).status_code == 422
+    result = post(client, run_id=RUN, include_automation_knowledge=True)
+    assert result.status_code == 200
+    assert fake.calls[-1]['project_knowledge']['sources']

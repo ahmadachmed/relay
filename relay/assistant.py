@@ -11,7 +11,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from .evidence import report_readiness
-from .knowledge import load_knowledge
+from .knowledge import load_knowledge, load_sut_knowledge
 from .contracts import PlanRequest
 from .execution import PlanError
 from .registry import resolve_plan
@@ -46,6 +46,8 @@ class ChatRequest(Strict):
     share_context: Literal[True]
     include_failure_details: bool = False
     include_project_knowledge: bool = False
+    include_automation_knowledge: bool = False
+    include_sut_knowledge: bool = False
     previous_proposal: Selection | None = None
     context: PlanRequest | None = None
     run_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
@@ -271,21 +273,26 @@ class Assistant:
             catalog = {key: {'framework': p.framework, 'branches': p.allowed_branches,
                        'pipelines': {k: v.model_dump() for k, v in p.pipelines.items()}}
                        for key, p in self.registry.projects.items() if p.enabled}
-            if (request.analysis_context is not None or request.include_project_knowledge) and not request.run_id:
+            automation_consent = request.include_automation_knowledge if 'include_automation_knowledge' in request.model_fields_set else request.include_project_knowledge
+            if (request.analysis_context is not None or automation_consent or request.include_sut_knowledge) and not request.run_id:
                 raise PlanError('ai_missing_run', 'Select a run before sharing analysis context.', 422)
             knowledge = None
+            sut_knowledge = None
             facts = None
             if request.run_id:
                 run = self.monitor.get(request.run_id)
                 saved = self.monitor.execution.get(request.run_id)
                 saved_plan = saved['plan']
-                identity = {'project_id': saved_plan['project_id'], 'framework': saved_plan['project']['framework'],
+                identity = {'sut_id': saved_plan.get('sut_id'), 'project_id': saved_plan['project_id'], 'framework': saved_plan['project']['framework'],
                             'repository': saved_plan['project']['repository'], 'branch': saved_plan['branch'], 'commit': saved['commit']}
-                if request.include_project_knowledge:
+                if automation_consent or request.include_sut_knowledge:
                     env_specs = saved_plan['project']['pipelines'][saved_plan['pipeline_id']]['parameters']
                     env_values = [saved_plan['parameters'].get(key) for key, spec in env_specs.items() if spec['kind'] == 'environment']
                     environment = env_values[0] if len(env_values) == 1 else None
-                    knowledge = load_knowledge(saved_plan['project_id'], environment)
+                    if automation_consent:
+                        knowledge = load_knowledge(saved_plan['project_id'], environment)
+                    if request.include_sut_knowledge:
+                        sut_knowledge = load_sut_knowledge(saved_plan['sut_id'], environment) if saved_plan.get('sut_id') else {'sources': [], 'diagnostics': ['Selected run has no SUT identity; SUT knowledge omitted.']}
                 summary = self.evidence.summary(request.run_id)
                 facts = {'identity': identity, 'knowledge': ({'sources': [{k:v for k,v in source.items() if k != 'text'} for source in knowledge['sources']], 'diagnostics': knowledge['diagnostics']} if knowledge else None), 'run_id': request.run_id, 'pipeline_status': run['pipeline_status'],
                          'test_status': summary['test_status'], **report_readiness(summary['artifacts'], summary['tests']),
@@ -311,8 +318,32 @@ class Assistant:
                     previous = resolve_plan(self.registry, PlanRequest(**request.previous_proposal.model_dump()))
                 except (ValueError, ValidationError):
                     raise PlanError('ai_invalid_previous_proposal', 'Previous proposal is no longer valid. Start with the current context.', 422) from None
-            context = redact({'project_knowledge': knowledge, 'analysis_context': ({'source': 'operator_asserted', **request.analysis_context.model_dump()} if request.analysis_context else None), 'previous_proposal': request.previous_proposal.model_dump() if previous else None, 'catalog': catalog, 'selection': request.context.model_dump() if request.context else None,
+            context = redact({'sut_knowledge': sut_knowledge, 'project_knowledge': knowledge, 'analysis_context': ({'source': 'operator_asserted', **request.analysis_context.model_dump()} if request.analysis_context else None), 'previous_proposal': request.previous_proposal.model_dump() if previous else None, 'catalog': catalog, 'selection': request.context.model_dump() if request.context else None,
                               'selected_run': facts, 'history': [t.model_dump() for t in request.history], 'message': request.message})
+            # Optional knowledge never crowds out the base report/chat context.
+            bundles = [context.get('project_knowledge'), context.get('sut_knowledge')]
+            candidates = []
+            for bundle in bundles:
+                if bundle:
+                    candidates.extend((bundle, source) for source in bundle['sources'])
+                    bundle['sources'] = []
+            candidates.sort(key=lambda item: (item[1]['document_id'] == 'troubleshooting', item[1].get('category', ''), item[1]['document_id']))
+            if context.get('selected_run') is not None:
+                context['selected_run']['knowledge'] = None
+            used = 0
+            for bundle, source in candidates:
+                size = len(json.dumps(source).encode())
+                bundle['sources'].append(source)
+                if used + size > 20_000 or len(json.dumps(context).encode()) + sum(len(json.dumps({k:v for k,v in doc.items() if k != 'text'}).encode()) for candidate in bundles if candidate for doc in candidate['sources']) > 46_000:
+                    bundle['sources'].pop()
+                    if 'Knowledge documents omitted to fit input budget.' not in bundle['diagnostics']:
+                        bundle['diagnostics'].append('Knowledge documents omitted to fit input budget.')
+                else:
+                    used += size
+            if facts is not None:
+                for key, bundle in [('knowledge', context.get('project_knowledge')), ('sut_knowledge', context.get('sut_knowledge'))]:
+                    facts[key] = {'sources': [{k:v for k,v in source.items() if k != 'text'} for source in bundle['sources']], 'diagnostics': bundle['diagnostics']} if bundle else None
+                context['selected_run'] = redact(facts)
             if len(json.dumps(context).encode()) > 48_000:
                 raise PlanError('ai_context_limit', 'Context exceeds the AI input budget. Reduce the added context, configured catalog or message.', 413)
             try:
