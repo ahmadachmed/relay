@@ -10,9 +10,12 @@ import yaml
 from .knowledge import read_file
 
 
-def read_local(source, path):
+def read_local(source, path, max_bytes=None, byte_counter=None):
     if source.provider != 'local' or not source.enabled or path not in source.files:
         raise ValueError('Source file unavailable')
+    limit = source.max_file_bytes if max_bytes is None else min(source.max_file_bytes, max_bytes)
+    if limit < 1:
+        raise ValueError('Source read budget exhausted')
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in source.location.split('/')[1:] + path.split('/')[:-1]:
@@ -21,7 +24,7 @@ def read_local(source, path):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = child
-        body = read_file(fd, path.split('/')[-1], source.max_file_bytes)
+        body = read_file(fd, path.split('/')[-1], limit, byte_counter=byte_counter)
     finally:
         os.close(fd)
     text = body.decode('utf-8')
@@ -72,10 +75,12 @@ def _extract_operation(snapshot, method, path, max_bytes):
     result = {'operation': operation, 'path_parameters': item.get('parameters', []),
               'security': operation.get('security', document.get('security', [])), 'references': {}}
     if document.get('swagger') == '2.0':
-        result['transport'] = {key: document[key] for key in ('host', 'basePath', 'schemes') if key in document}
+        result['transport'] = {key: document[key] for key in ('host', 'basePath') if key in document}
         for key in ('consumes', 'produces', 'schemes'):
             if key in operation or key in document:
                 result[key] = operation.get(key, document.get(key))
+        if 'schemes' in result:
+            result['transport']['schemes'] = result['schemes']
     else:
         result['servers'] = operation.get('servers', item.get('servers', document.get('servers', [{'url': '/'}])))
     pending = [result.get('servers', []), result['operation'], result['path_parameters'], result['security']]
@@ -92,14 +97,18 @@ def _extract_operation(snapshot, method, path, max_bytes):
         if isinstance(value, dict):
             ref = value.get('$ref')
             if ref is not None:
-                if not isinstance(ref, str) or not ref.startswith('#/'):
+                if not isinstance(ref, str) or not ref.startswith('#'):
                     raise ValueError('External references are unsupported')
                 if ref not in result['references']:
                     target = document
                     try:
                         if re.search(r'%(?![0-9A-Fa-f]{2})', ref):
                             raise ValueError('Invalid reference encoding')
-                        for part in unquote(ref[2:], errors='strict').split('/'):
+                        pointer = unquote(ref[1:], errors='strict')
+                        if pointer and not pointer.startswith('/'):
+                            raise ValueError('Invalid local pointer')
+                        parts = pointer[1:].split('/') if pointer else []
+                        for part in parts:
                             if re.search(r'~(?![01])', part):
                                 raise ValueError('Invalid pointer escape')
                             part = part.replace('~1', '/').replace('~0', '~')
