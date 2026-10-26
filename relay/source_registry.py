@@ -8,13 +8,13 @@ from typing import Literal
 
 from pydantic import Field, field_validator, model_validator
 
-from .contracts import Contract, SutId
+from .contracts import Contract, Name, SutId, Value, sensitive_source_component
 
 
 class Source(Contract):
     category: Literal['automation', 'sut']
-    scope_id: SutId
-    environments: list[SutId] = Field(min_length=1, max_length=32)
+    scope_id: Name
+    environments: list[Value] = Field(min_length=1, max_length=32)
     provider: Literal['local', 'bitbucket']
     location: str = Field(min_length=1, max_length=1000, exclude=True)
     files: list[str] = Field(min_length=1, max_length=128)
@@ -33,18 +33,24 @@ class Source(Contract):
             parts = value.split('/')
             if any(not p or p.startswith('.') for p in parts):
                 raise ValueError('invalid source path')
-            if any(re.search(r'secret|password|credential|private.key', p, re.I) for p in parts):
+            if any(sensitive_source_component(p) for p in parts):
                 raise ValueError('excluded source path')
         return values
 
     @model_validator(mode='after')
     def valid_location(self):
+        if self.category == 'sut' and not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', self.scope_id):
+            raise ValueError('invalid SUT scope')
+        if '\x00' in self.location:
+            raise ValueError('invalid source location')
         if len(set(self.environments)) != len(self.environments):
             raise ValueError('duplicate environments')
         if self.provider == 'local':
             if not self.location.startswith('/') or any(p in ('.', '..') for p in self.location.split('/')):
                 raise ValueError('local root must be absolute without traversal')
         elif not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', self.location):
+            raise ValueError('invalid repository')
+        if self.provider == 'bitbucket' and any(p in ('.', '..') for p in self.location.split('/')):
             raise ValueError('invalid repository')
         return self
 
