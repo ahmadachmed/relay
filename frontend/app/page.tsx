@@ -78,8 +78,9 @@ type AiReply = {
   } | null;
   limitations: string[];
 };
-type Message = { role: "user" | "relay"; text: string };
+type Message = { id?: string; role: "user" | "relay"; text: string };
 const initialMessage: Message = {
+  id: "initial",
   role: "relay",
   text: "Choose a project and its parameters, then preview your execution plan. I’ll keep the run and its evidence together.",
 };
@@ -182,9 +183,14 @@ export default function Workspace() {
   const [evidence, setEvidence] = useState<Evidence | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [recoverId, setRecoverId] = useState("");
+  const [historyBoundary,setHistoryBoundary] = useState<Record<string,string>>({});
   const [conversations, setConversations] = useState<Record<string, Message[]>>({});
   const conversationKey = selected || "planning";
   const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
+  function excludePriorHistory() {
+    const last = messages.at(-1);
+    if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
+  }
   const setMessages = useCallback((value: Message[] | ((old: Message[]) => Message[])) => {
     setConversations(old => ({...old, [conversationKey]: typeof value === "function" ? value(old[conversationKey] || (selected ? [] : [initialMessage])) : value}));
   }, [conversationKey, selected]);
@@ -224,7 +230,7 @@ export default function Workspace() {
       ),
   );
   const addMessage = useCallback(
-    (message: Message) => setMessages((old) => [...old.slice(-39), message]),
+    (message: Message) => setMessages((old) => [...old.slice(-39), {...message,id:crypto.randomUUID()}]),
     [setMessages],
   );
 
@@ -332,7 +338,7 @@ export default function Workspace() {
           if (saved && typeof saved === "object" && !Array.isArray(saved)) {
             for (const [key, value] of Object.entries(saved)) {
               if ((key === "planning" || /^[a-f0-9]{32}$/.test(key)) && Array.isArray(value))
-                clean[key] = value.filter(m => m && ["user", "relay"].includes(m.role) && typeof m.text === "string").slice(-40);
+                clean[key] = value.filter(m => m && ["user", "relay"].includes(m.role) && typeof m.text === "string").slice(-40).map(m=>({...m,id:m.id || crypto.randomUUID()}));
             }
           }
           setConversations(clean);
@@ -461,7 +467,7 @@ export default function Workspace() {
   function changeContext(next: Context) {
     if (shareSources) {
       setShareSources(false); setSourceIds([]);
-      setConversations(old=>({...old,[selected || "planning"]:[]}));
+      excludePriorHistory();
     }
     setAiError(null);
     revision.current++;
@@ -695,6 +701,7 @@ export default function Workspace() {
           : null,
         run_id: selected || null,
         history: messages
+          .slice(historyBoundary[conversationKey] ? messages.findIndex(m=>m.id===historyBoundary[conversationKey])+1 : 0)
           .slice(-8)
           .map((m) => ({ role: m.role, text: m.text.slice(0, 4000) })),
       });
@@ -1538,7 +1545,7 @@ export default function Workspace() {
           {aiEnabled && <SourceControls enabled={sourceEnabled} sources={sourceCatalog.filter(source=>{
             const identity = selected ? savedSourceIdentity : {project:context.project,sut:context.sut_id || null,environment:Object.entries(pipeline?.parameters || {}).filter(([,p])=>p.kind==="environment").length===1?context.parameters[Object.entries(pipeline?.parameters || {}).find(([,p])=>p.kind==="environment")![0]]:null};
             return identity && source.scope_id === (source.category==="sut"?identity.sut:identity.project) && source.environments.includes(identity.environment || "");
-          })} selected={sourceIds} consent={shareSources} busy={Boolean(busy)} onChange={(ids,consent)=>{revision.current++;setSourceIds(ids);setShareSources(consent);setReplies({});setConversations({});setAiError(null);}}/>}
+          })} selected={sourceIds} consent={shareSources} busy={Boolean(busy)} onChange={(ids,consent)=>{revision.current++;setSourceIds(ids);setShareSources(consent);setReplies({});excludePriorHistory();setAiError(null);}}/>}
           {aiEnabled && (
             <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for planning or the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for planning or the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
               <label>
@@ -1547,7 +1554,7 @@ export default function Workspace() {
                   checked={shareAi}
                   disabled={Boolean(busy)}
                   onChange={(e) => {
-                    revision.current++; setReplies({}); setConversations({}); setAiError(null);
+                    revision.current++; setReplies({}); excludePriorHistory(); setAiError(null);
                     setShareAi(e.target.checked);
 
                   }}
@@ -1560,7 +1567,7 @@ export default function Workspace() {
                   type="checkbox"
                   checked={shareFailures}
                   disabled={Boolean(busy)}
-                  onChange={(e) => {revision.current++;setReplies({});setConversations({});setAiError(null);setShareFailures(e.target.checked);}}
+                  onChange={(e) => {revision.current++;setReplies({});excludePriorHistory();setAiError(null);setShareFailures(e.target.checked);}}
                 />
                 Include failure names/messages (best-effort redaction; verify
                 sensitive content first)

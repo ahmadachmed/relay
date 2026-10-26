@@ -224,7 +224,7 @@ class SourceService:
                 else:
                     item['freshness'] = 'pinned_commit_not_rechecked'
             except (PlanError, OSError, ValueError):
-                pass
+                item['freshness'] = 'unavailable'
         from .assistant import redact_source_metadata
         return redact_source_metadata(record)
 
@@ -497,7 +497,7 @@ class SourceSession:
                 else:
                     value = value[part]
             walk(value,target)
-            return '#'+prefix+fragment
+            return '#'+quote(prefix+fragment, safe='/~')
         def walk(value, origin):
             nonlocal count
             identity = (origin,id(value))

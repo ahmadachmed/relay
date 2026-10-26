@@ -447,3 +447,31 @@ def test_operation_auth_override_does_not_require_unused_auth_dependency(harness
     shared=json.loads(fake.calls[-1]['source_context']['sections'][0]['text'])
     assert shared['security']==[]
     assert 'security_definitions' not in shared
+
+
+
+def test_percent_pointer_survives_runtime_rewrite(harness):
+    app,client,fake,root,config=harness
+    doc=json.loads((root/'swagger.json').read_text())
+    doc['components']['schemas']['Voucher']['properties']['discount%']={'type':'number'}
+    doc['paths']['/voucher/{id}']['get']['responses']['200']['content']['application/json']['schema']['$ref']='#/components/schemas/Voucher/properties/discount%25'
+    (root/'swagger.json').write_text(json.dumps(doc))
+    result=post(client,source_ids=['contract'])
+    assert result.status_code==200,result.text
+    assert result.json()['source_manifest']['sources']
+    assert 'number' in fake.calls[-1]['source_context']['sections'][0]['text']
+
+
+def test_missing_dependency_is_unavailable(harness):
+    app,client,fake,root,config=harness
+    value=json.loads(config.read_text())
+    value['sources']['contract']['files'].append('schema.json')
+    config.write_text(json.dumps(value))
+    doc=json.loads((root/'swagger.json').read_text())
+    doc['paths']['/voucher/{id}']['get']['responses']['200']['content']['application/json']['schema']['$ref']='schema.json#/V'
+    (root/'swagger.json').write_text(json.dumps(doc))
+    (root/'schema.json').write_text(json.dumps({'V':{'type':'number'}}))
+    manifest=post(client,source_ids=['contract']).json()['source_manifest']
+    (root/'schema.json').unlink()
+    result=client.get('/api/source-manifests/'+manifest['id']).json()
+    assert result['sources'][0]['freshness']=='unavailable'

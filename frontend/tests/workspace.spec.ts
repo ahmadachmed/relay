@@ -1064,7 +1064,7 @@ test('source planning without a run has independent opt-in, citations and freshn
   await expect(references).toContainText('changed');
   await consent.uncheck();
   await expect(references).toHaveCount(0);
-  await expect(page.getByLabel('QA conversation history')).not.toContainText('Voucher contract from approved references.');
+  await expect(page.getByLabel('QA conversation history')).toContainText('Voucher contract from approved references.');
   await page.getByLabel('ENV',{exact:true}).selectOption('dev');
   await expect(page.getByLabel('contract · sut/service-a',{exact:false})).toHaveCount(0);
 });
@@ -1088,4 +1088,23 @@ test('source response from an earlier planning selection is fenced after run swi
   await expect(page.getByRole('region',{name:'Original source references'})).toHaveCount(0);
   await expect(page.getByText('Stale source answer.',{exact:true})).toHaveCount(0);
   await expect(page.getByLabel('Share selected original sources with AI')).not.toBeChecked();
+});
+
+
+
+test('source and AI sharing changes preserve other run histories',async({page})=>{
+ await sourceFixtures(page);
+ await page.addInitScript(()=>localStorage.setItem('relay.ui.conversations-v1',JSON.stringify({['a'.repeat(32)]:[{role:'user',text:'Run A discussion'}],['b'.repeat(32)]:[{role:'user',text:'Run B discussion'}]})));
+ await page.goto('/ui/');
+ await page.getByRole('combobox',{name:'System under test'}).selectOption('service-a');
+ await page.getByText('Original sources · planning and analysis',{exact:true}).click();
+ await page.getByLabel('contract · sut/service-a',{exact:false}).check();
+ const retained=()=>page.evaluate(()=>JSON.parse(localStorage.getItem('relay.ui.conversations-v1') || '{}'));
+ await expect.poll(async()=>Object.keys(await retained())).toContain('a'.repeat(32));
+ await page.getByText('Settings · AI context sharing',{exact:true}).click();
+ await page.getByLabel('Send chat, recent conversation, configured context and selected run summary to AI').uncheck();
+ await page.getByLabel('Include failure names/messages',{exact:false}).uncheck();
+ const history=await retained();
+ expect(history['a'.repeat(32)][0].text).toBe('Run A discussion');
+ expect(history['b'.repeat(32)][0].text).toBe('Run B discussion');
 });
