@@ -8,6 +8,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote
 import httpx
 from .execution import PlanError
+from .contracts import normalize_source_directory
 from .providers.bitbucket import BitbucketCatalogProvider, API
 from .assistant import redact
 
@@ -40,9 +41,10 @@ class SourceContext:
         project = self.registry.projects.get(plan['project_id'])
         repository = plan['project']['repository']
         commit = saved['commit']
+        directory_allowed = bool(project) and any(path.startswith(normalize_source_directory(directory)) for directory in project.source_directories)
         if (not project or not project.enabled or project.provider != 'bitbucket'
             or plan['project']['provider'] != 'bitbucket' or project.repository != repository
-            or path not in project.source_files):
+            or not (path in project.source_files or directory_allowed)):
             raise PlanError('source_not_allowed', 'Repository or file is not currently approved for this run.', 403)
         if not re.fullmatch(r'[0-9a-fA-F]{40}', commit or ''):
             raise PlanError('source_missing_commit', 'Saved run has no valid immutable commit.', 422)

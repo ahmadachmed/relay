@@ -83,3 +83,65 @@ def test_no_redirect_retry_or_head_fallback(source,status):
     app.state.source_context.transport=httpx.MockTransport(handler)
     assert preview(client,run).status_code==502
     assert len(count)==1
+
+
+@pytest.mark.parametrize('directory', ['tests', 'tests/'])
+def test_directory_permission_includes_direct_and_nested_files(source,directory):
+    app,client,run,calls=source
+    project=app.state.execution.registry.projects['api']
+    project.source_files=[]
+    project.source_directories=[directory]
+    for path in ('tests/test_api.py','tests/nested/test_api.py'):
+        requests=[]
+        def handler(request):
+            requests.append(request)
+            if request.url.query:
+                return httpx.Response(200,json={'type':'commit_file','path':path,'commit':{'hash':run['commit']},'attributes':[],'size':len(BODY)})
+            return httpx.Response(200,content=BODY)
+        app.state.source_context.transport=httpx.MockTransport(handler)
+        assert preview(client,run,path=path).status_code==200
+        assert len(requests)==2
+        assert all('/src/'+run['commit']+'/' in r.url.path for r in requests)
+
+@pytest.mark.parametrize('path',['tests-other/test_api.py','tests2/test_api.py','tests/../other.py','tests/.env','tests/secret.py','tests/blob.png','other/test_api.py'])
+def test_directory_permission_keeps_boundaries_and_denials(source,path):
+    app,client,run,calls=source
+    project=app.state.execution.registry.projects['api']
+    project.source_files=[]
+    project.source_directories=['tests/']
+    assert preview(client,run,path=path).status_code in (403,422)
+    assert not calls
+
+@pytest.mark.parametrize('attribute',['link','binary','subrepository'])
+def test_directory_permission_does_not_bypass_metadata(source,attribute):
+    app,client,run,calls=source
+    project=app.state.execution.registry.projects['api']
+    project.source_files=[];project.source_directories=['tests/']
+    seen=[]
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200,json={'type':'commit_file','path':'tests/test_api.py','commit':{'hash':run['commit']},'attributes':[attribute],'size':len(BODY)})
+    app.state.source_context.transport=httpx.MockTransport(handler)
+    assert preview(client,run).status_code==502
+    assert len(seen)==1
+
+@pytest.mark.parametrize('directories',[['/'],[''],['.'],['../tests'],['tests/../other'],['tests//'],['tests/*'],['.git/'],['tests/secret/'],['tests','tests/'],['https://example.org/'],['tests\\nested']])
+def test_invalid_directory_configuration_is_rejected(source,directories):
+    from pydantic import ValidationError
+    from relay.contracts import Project
+    app,client,run,calls=source
+    config=app.state.execution.registry.projects['api'].model_dump()
+    config['source_directories']=directories
+    with pytest.raises(ValidationError):
+        Project.model_validate(config)
+    assert not calls
+
+
+def test_directory_configuration_normalizes_and_defaults(source):
+    from relay.contracts import Project
+    app,_,_,_=source
+    config=app.state.execution.registry.projects['api'].model_dump()
+    config.pop('source_directories')
+    assert Project.model_validate(config).source_directories==[]
+    config['source_directories']=['tests','keywords/']
+    assert Project.model_validate(config).source_directories==['tests/','keywords/']
