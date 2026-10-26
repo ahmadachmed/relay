@@ -45,3 +45,35 @@ def test_unsafe_paths(path):
 def test_invalid_roots(location):
     with pytest.raises(ValidationError):
         registry(location=location)
+
+
+def test_automation_scope_and_environment_compatibility():
+    value = registry(category='automation', scope_id='api.v2', environments=['uat.sg'])
+    assert value.authorize('contract', 'automation', 'api.v2', 'uat.sg')
+    with pytest.raises(ValidationError):
+        registry(scope_id='service.a')
+
+
+@pytest.mark.parametrize('path', ['privatekey.json', 'keys/privatekey.yaml', 'private-key.json', 'private_key.json'])
+def test_sensitive_paths_match_existing_reader(path):
+    from relay.source_context import safe_path
+    from relay.execution import PlanError
+    with pytest.raises(ValidationError):
+        registry(files=[path])
+    with pytest.raises(PlanError):
+        safe_path(path)
+
+
+@pytest.mark.parametrize('location', ['../repo', 'owner/..', './repo', 'owner/.'])
+def test_invalid_repository_components(location):
+    with pytest.raises(ValidationError):
+        registry(provider='bitbucket', location=location)
+
+
+def test_valid_repository():
+    assert registry(provider='bitbucket', location='owner/repo.name')
+
+
+def test_nul_in_local_root():
+    with pytest.raises(ValidationError):
+        registry(location='/private/docs\x00tail')
