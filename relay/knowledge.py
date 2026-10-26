@@ -25,6 +25,8 @@ def read_file(directory, name, limit):
 def _load_knowledge(project_id, environment, category=None):
     result = {'sources': [], 'diagnostics': []}
     root = os.getenv('RELAY_KNOWLEDGE_ROOT')
+    if root and not os.path.isabs(root):
+        return {'sources': [], 'diagnostics': ['Knowledge root must be absolute.']}
     if not root:
         result['diagnostics'].append('Project knowledge is not configured.')
         return result
@@ -41,7 +43,11 @@ def _load_knowledge(project_id, environment, category=None):
                 child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
                 os.close(fd)
                 fd = child
-            manifest = json.loads(read_file(fd, 'manifest.json', 12000))
+            managed = None
+            if category:
+                from .knowledge_revisions import current
+                managed = current(fd, category, project_id)
+            manifest = ({'schema_version': 2, 'category': category, 'scope_id': project_id, 'documents': managed['documents']} if managed else json.loads(read_file(fd, 'manifest.json', 12000)))
             if category:
                 if not isinstance(manifest, dict) or manifest.get('schema_version') != 2 or manifest.get('category') != category or manifest.get('scope_id') != project_id:
                     raise ValueError('Invalid manifest scope')
@@ -79,7 +85,18 @@ def _load_knowledge(project_id, environment, category=None):
                     age = (date.today() - reviewed).days
                     if not 0 <= age <= 180:
                         raise ValueError('Review date is stale or in the future')
-                    body = read_file(fd, name, MAX_FILE)
+                    provenance = {}
+                    for key in ('source_repository', 'source_path', 'source_commit'):
+                        if key in entry:
+                            value = entry[key]
+                            if not isinstance(value, str) or not 0 < len(value) <= 300 or (key == 'source_commit' and not re.fullmatch(r'[a-fA-F0-9]{40}', value)):
+                                raise ValueError('Invalid source provenance')
+                            if key == 'source_repository' and not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', value):
+                                raise ValueError('Invalid source provenance')
+                            if key == 'source_path' and (value.startswith('/') or '\\' in value or ':' in value or '..' in value.split('/')):
+                                raise ValueError('Invalid source provenance')
+                            provenance[key] = value
+                    body = entry['text'].encode('utf-8') if managed else read_file(fd, name, MAX_FILE)
                     digest = hashlib.sha256(body).hexdigest()
                     if entry.get('sha256') != digest:
                         raise ValueError('Document changed since review')
@@ -94,7 +111,7 @@ def _load_knowledge(project_id, environment, category=None):
                     result['sources'].append({'id': hashlib.sha256(identity.encode()).hexdigest(),
                         'category': category or 'automation', 'scope_id': project_id, 'document_id': doc_id, 'project_id': project_id, 'path': name, 'sha256': digest,
                         'revision': entry['revision'], 'owner': entry['owner'], 'source': entry['source'],
-                        'type': entry['type'], 'reviewed_at': reviewed.isoformat(), 'verification': 'operator_verified', 'text': text})
+                        **provenance, 'bundle_revision': managed['revision'] if managed else None, 'type': entry['type'], 'reviewed_at': reviewed.isoformat(), 'verification': 'operator_verified', 'text': text})
                 except (OSError, ValueError, TypeError, UnicodeError) as exc:
                     reasons = {'Invalid entry', 'Invalid or duplicate document identity/path', 'Project does not match',
                                'Invalid environment applicability', 'Document is not verified', 'Missing source/review metadata',
@@ -104,7 +121,7 @@ def _load_knowledge(project_id, environment, category=None):
                     result['diagnostics'].append(reason + '; omitted.')
         finally:
             os.close(fd)
-    except (OSError, ValueError, TypeError, RecursionError):
+    except (OSError, ValueError, TypeError, KeyError, RecursionError):
         result['diagnostics'].append('Knowledge directory or manifest is unavailable or invalid.')
     return result
 

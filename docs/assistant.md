@@ -95,3 +95,14 @@ Analysis includes provisional triage: suspected product bug, suspected automatio
 For a selected run, the execution sidebar offers expected behavior/acceptance criteria (4000 characters), relevant automation code (6000) and environment notes (2000). Inputs are separate per run and held only in page memory, reset on reload. Their own sharing checkbox starts off for each run; general AI sharing must also be enabled. Clear removes that run's inputs and opts it out. No repository files or URLs are fetched and no code is executed.
 
 The request includes this context only when explicitly enabled. Backend validation requires a selected run, applies field and total request budgets, and redacts the context before sending it to the provider. It is marked operator_asserted, separate from report observations; it is not a citation or proof of the executed commit. The model is instructed to compare it with evidence, state conflicts and return up to five missing_context requests. The UI shows these separately as Context needed. Existing classification evidence checks and explicit pipeline confirmation remain enforced. Provider quality, actual requirement correctness and complete redaction are not guaranteed. This is a delivery toward #7; full live evaluations and automatic repository context remain outstanding.
+
+## Knowledge proposal consent
+
+`include_automation_knowledge` and `include_sut_knowledge` opt into independent
+reference bundles for the saved run. The legacy `include_project_knowledge` flag
+is an automation-only alias; explicit new automation consent takes precedence.
+`propose_knowledge: true` additionally requests a reviewable draft grounded in
+shared failure evidence. The model may return `knowledge_suggestion: null`.
+Unrequested proposals are rejected. Model responses can never approve/apply a
+draft; those are separate local operator actions. See [knowledge workflow and
+local acceptance](project-knowledge.md#reviewed-ai-proposals-revisions-and-rollback).

@@ -35,7 +35,9 @@ import {
   type Run,
 } from "../lib/api";
 
-type Knowledge = {sources:{id:string;category?:string;scope_id?:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]};
+import KnowledgeReview from "./KnowledgeReview";
+
+type Knowledge = {sources:{id:string;source_repository?:string;source_path?:string;source_commit?:string;category?:string;scope_id?:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]};
 type Context = {
   sut_id?: string | null;
   project: string;
@@ -115,6 +117,7 @@ function errorText(error: unknown) {
 }
 
 export default function Workspace() {
+  const [knowledgeRefresh, setKnowledgeRefresh] = useState(0);
   const [aiEnabled, setAiEnabled] = useState(false);
   const [shareAi, setShareAi] = useState(true);
   const [shareFailures, setShareFailures] = useState(true);
@@ -177,7 +180,7 @@ export default function Workspace() {
   }, [conversationKey, selected]);
   const [command, setCommand] = useState("");
   const [error, setError] = useState("");
-  const [aiError, setAiError] = useState<{message: string; text: string} | null>(null);
+  const [aiError, setAiError] = useState<{message: string; text: string; proposeKnowledge?: boolean} | null>(null);
   const [historyError, setHistoryError] = useState("");
   const [runError, setRunError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
@@ -626,7 +629,7 @@ export default function Workspace() {
       setBusy("");
     }
   }
-  async function askAi(text: string) {
+  async function askAi(text: string, proposeKnowledge = false) {
     if (
       !shareAi ||
       !aiEnabled ||
@@ -652,6 +655,7 @@ export default function Workspace() {
     try {
       const value = await post<AiReply>("/api/assistant/chat", {
         message: text,
+        propose_knowledge: proposeKnowledge,
         share_context: true,
         include_failure_details: shareFailures,
         include_automation_knowledge: Boolean(selected) && shareKnowledge,
@@ -674,13 +678,14 @@ export default function Workspace() {
       if (version === revision.current) {
         if (value.answer.action === "propose") proposals.current[conversationKey] = value.answer.selection;
         setAiReply(value);
+        if (proposeKnowledge) setKnowledgeRefresh(old=>old+1);
         addMessage({
           role: "relay",
           text: `AI suggestion: ${value.answer.message}`,
         });
       }
     } catch (e) {
-      if (version === revision.current) setAiError({message: errorText(e), text});
+      if (version === revision.current) setAiError({message: errorText(e), text, proposeKnowledge});
     } finally {
       aiLock.current = false;
       actionLock.current = false;
@@ -931,7 +936,7 @@ export default function Workspace() {
             <div className="error-banner" role="alert">
               {aiError.message} Retry sends this message to AI again; review sharing settings if needed.
               <button className="text-button" disabled={Boolean(busy) || !shareAi || !aiEnabled}
-                onClick={() => void askAi(aiError.text)}>Retry AI message</button>
+                onClick={() => void askAi(aiError.text, aiError.proposeKnowledge)}>Retry AI message</button>
               <button className="text-button" onClick={() => setAiError(null)}>Dismiss</button>
             </div>
           )}
@@ -1010,7 +1015,7 @@ export default function Workspace() {
                   <details open>
                     <summary>Observed report summary</summary>
                     {aiReply.facts.identity && <p>Analyzed run: {aiReply.facts.identity.project_id} · {aiReply.facts.identity.framework} · {aiReply.facts.identity.branch} · commit {aiReply.facts.identity.commit}</p>}
-                    {([['Automation', aiReply.facts.knowledge], ['SUT', aiReply.facts.sut_knowledge]] as const).map(([category, bundle]) => bundle && <section key={category} aria-label={`${category} knowledge used`}><h3>{category} knowledge used</h3><p>Operator-maintained references, not runtime evidence.</p><ul>{bundle.sources.map(source => <li key={source.id}>{source.category || category} · {source.scope_id || aiReply.facts?.identity?.project_id} · {source.document_id} · revision {source.revision} · SHA256 {source.sha256} · reviewed {source.reviewed_at}</li>)}</ul><ul>{bundle.diagnostics.map((item,i) => <li key={i}>{item}</li>)}</ul></section>)}
+                    {([['Automation', aiReply.facts.knowledge], ['SUT', aiReply.facts.sut_knowledge]] as const).map(([category, bundle]) => bundle && <section key={category} aria-label={`${category} knowledge used`}><h3>{category} knowledge used</h3><p>Operator-maintained references, not runtime evidence.</p><ul>{bundle.sources.map(source => <li key={source.id}>{source.category || category} · {source.scope_id || aiReply.facts?.identity?.project_id} · {source.document_id} · revision {source.revision} · SHA256 {source.sha256} · reviewed {source.reviewed_at}{source.source_repository && <> · source {source.source_repository} / {source.source_path} @ {source.source_commit || "unknown commit"}</>}</li>)}</ul><ul>{bundle.diagnostics.map((item,i) => <li key={i}>{item}</li>)}</ul></section>)}
                     {aiReply.facts.analysis_limitations && <>
                       <p>{aiReply.facts.can_analyze_failure_details ? "Available failure details can be analyzed with these limits." : "Analysis uses only available shared report data."}</p>
                       <ul>{aiReply.facts.analysis_limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul>
@@ -1532,6 +1537,10 @@ export default function Workspace() {
             </details>
           )}
 
+        {selected && <>
+          {aiEnabled && <button disabled={Boolean(busy)||!shareAi||(!shareKnowledge&&!shareSutKnowledge)} onClick={()=>void askAi("Propose concise reusable knowledge from this run's shared failure evidence. Keep hypotheses unverified and use only the selected sharing categories.", true)}>Suggest knowledge from this run</button>}
+          <KnowledgeReview key={selected} runId={selected} refresh={knowledgeRefresh} busy={Boolean(busy)} onBusy={value=>{actionLock.current=value;setBusy(value?"knowledge":"");}} onChanged={()=>{revision.current++;setReplies({});setKnowledgeRefresh(old=>old+1);}}/>
+        </>}
         {selected && <p aria-label="Selected run SUT">Selected run SUT: {savedSut === undefined ? "Unknown" : savedSut || "None"}</p>}
         <p className="context-description">
           Execution selection for a new plan. Analysis uses the selected run’s saved project and commit.

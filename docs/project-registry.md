@@ -30,3 +30,18 @@ Each report declares a `format` parser identifier and a relative `path`. A proje
 ## Compatibility and scope
 
 The existing `relay.example.json`, `/api/projects`, `/api/chat` and local JSON run storage remain the legacy local demo. Its Node Playwright adapter has not been migrated here; the new pipeline registry models web as pytest Python only. Do not enable the legacy Node adapter for a pytest repository. Remote trigger (#3), persisted runs (#4), and report parser integration (#5) will consume these contracts. These are schema contracts, not a state-transition engine or completed runtime integrations.
+
+### Optional SUT identity
+
+A pipeline may declare up to 16 unique safe service IDs:
+
+```json
+"sut_ids": ["service-a", "service-b"]
+```
+
+Preview requests may select one via `sut_id`, or use `null` for automation-only
+context. The selected ID must belong to that pipeline and is persisted in the
+plan snapshot. It is not a Bitbucket pipeline variable and does not prove which
+service version was deployed. An existing saved run cannot be retagged by changing
+the registry or current UI selection. See [project knowledge](project-knowledge.md)
+for category manifests, sharing consent and reviewed knowledge proposals.

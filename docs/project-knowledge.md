@@ -89,3 +89,103 @@ preference. Changing either clears displayed AI analyses; settings persist
 independently. General AI sharing consent is still required. Analysis displays
 category/scope, revision/hash, review date and omissions for the sources shared.
 Document text is sent only to the configured model, not returned in provenance.
+
+## Reviewed AI proposals, revisions and rollback
+
+Select a saved run, enable failure details plus the intended automation/SUT
+knowledge category in Settings, then click **Suggest knowledge from this run**.
+This explicitly requests an unverified draft, not an update. The model may
+return no proposal if the evidence does not justify reusable knowledge. Models
+must cite artifacts from the shared failure sample; arbitrary/cross-run IDs,
+unrequested proposals and unconsented categories are rejected by the backend.
+A run without an explicit SUT cannot propose SUT knowledge. No service/version
+identity is inferred from tags, chat, repository names or current dropdowns.
+
+Open **Knowledge proposals and history**, select the draft and review its scope,
+environment, rationale, full content, diff, evidence, base revision/hash and
+proposal hash. **Save edited draft for review** creates a new draft and supersedes
+the old one. Reject is explicit. Neither draft generation nor editing touches
+active knowledge. AI instructions embedded in documents are never authority.
+
+Enter a reviewer label and approve the exact reviewed version. By default,
+**Store unverified draft** keeps it outside active knowledge. Only the separate
+**I independently verified the claims** checkbox enables **Approve and activate
+knowledge**. Approval is not proof of a claim: the operator must actually verify
+it against appropriate evidence. The reviewer label is an operator assertion in
+this local-only app, not an authenticated identity. General AI sharing consent
+is independent of the permission to persist an approved draft.
+
+Before activation, Relay rechecks scope, byte limits, excluded/sensitive content
+(best effort), expected bundle revision/hash and approved proposal hash. Another
+edit or apply makes an old approval stale (409); generate a fresh draft and review
+again. An identical approval retry is idempotent. A changed draft needs a new
+approval. Updating a document replaces its whole content and applies it only to
+the selected run's environment; review this applicability before approval.
+
+### Atomic storage
+
+`RELAY_KNOWLEDGE_ROOT` must be an existing absolute private directory. Migrate
+legacy bundles to schema version 2 before editing through Relay. New category
+and scope directories are created only on verified apply. Secure component walks,
+regular-file checks and no-follow reads/writes reject symlinks and special files.
+The operator must protect the private root and Relay data directory from other
+local users; do not commit either directory or expose this API to the network.
+
+A first apply imports the existing flat bundle as a rollback target. Approved
+bundles then use immutable `.relay-revision-<id>.json` snapshots containing both
+manifest metadata and document bytes. The single `.relay-current.json` pointer is
+the commit point; temp writes and revisions are fsynced before pointer replacement.
+A failed pre-commit write leaves the prior complete bundle active. A crash after
+pointer commit but before the draft status update is recovered by retrying the
+same approval. Unreferenced snapshots are never discovered or loaded. Per-bundle
+OS locks and SQLite transactions prevent concurrent approvals from overwriting.
+
+After the first managed commit, flat files are reference/import material, not
+active configuration: edit through reviewed proposals. The loader reads one
+complete snapshot, verifies hashes and retains environment/review-age filters.
+There is no automatic refresh of hashes for arbitrary local edits. Snapshot
+source metadata returned to analysis excludes document text. Proposal bodies
+and decisions are private records in Relay's existing data database.
+
+History shows the 30 most recent reachable revisions, reviewer label/time,
+operation, before/after hashes and provenance. Older snapshots remain on disk.
+**Review rollback** creates a new proposal with the full bundle diff. It requires
+fresh review and approval, rejects stale base state, and appends a new revision
+instead of deleting history. Original document review dates, verification and
+environments are preserved, so rollback cannot make stale knowledge fresh.
+After apply/rollback, displayed analyses are cleared; a new explicit analysis
+loads the current approved snapshot. Earlier provenance retains its original
+revision/hash.
+
+### Optional repository provenance
+
+Schema-2 manifest document entries may specify `source_repository` (up to 300
+characters), `source_path` (up to 300), and `source_commit` (full 40-digit hex).
+These are bounded descriptive metadata, never fetch paths or executable input.
+They identify the reviewed source, not the deployed SUT version. Approved
+AI-derived updates record their proposal/run and report evidence instead.
+
+### Local acceptance
+
+1. Pull/build the frontend and restart Relay with private `RELAY_PROJECTS` and
+   `RELAY_KNOWLEDGE_ROOT`. Use a run that already has parsed, shared failures.
+2. Configure allowed `sut_ids` before previewing a **new** SUT-specific run. Old
+   run identity is immutable; generic automation proposals work independently.
+3. Enable the intended knowledge category and failure details. Request a draft.
+4. Review/edit it and store as unverified. Analyze again: the draft must not be
+   present in the approved context-used list.
+5. After independently checking the claims, approve and activate that exact draft.
+   Analyze again: context-used must show the new document/hash/revision.
+6. Generate two drafts against the same base. Apply one; approval of the other
+   must return a conflict rather than overwrite it.
+7. Load history and review/approve rollback. Analyze again and check restored
+   content hashes and unchanged review dates. No new pipeline is needed for
+   these checks when an appropriate saved run already exists.
+
+Offline automated acceptance uses synthetic reports, local API requests and a
+stub model. Run `python -m pytest -q`, then `npm run build --prefix frontend`,
+`npm run typecheck --prefix frontend`, and
+`npm run test:e2e --prefix frontend -- --workers=1`.
+No live company pipelines, paid model calls or private source documents are
+required for the automated checks. Real project bundle curation remains an
+operator task based on reviewed private sources.
