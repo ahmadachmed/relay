@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 from urllib.parse import quote
 import httpx
 from .execution import PlanError
-from .contracts import normalize_source_directory
+from .contracts import normalize_source_directory, sensitive_source_component
 from .providers.bitbucket import BitbucketCatalogProvider, API
 from .assistant import redact
 
@@ -21,7 +21,7 @@ def safe_path(path):
     if (not path or len(path) > 300 or any(p in ('', '.', '..') or p.startswith('.') for p in parts)
         or not re.fullmatch(r'[A-Za-z0-9_./-]+', path)
         or suffix not in ('.py', '.robot', '.resource', '.yaml', '.yml', '.json', '.toml', '.md')
-        or any(re.search(r'(?i)(credential|secret|password|private[-_]?key)', p) for p in parts)):
+        or any(sensitive_source_component(p) for p in parts)):
         raise PlanError('source_path_denied', 'Source path is not an approved text-code path.', 422)
 
 

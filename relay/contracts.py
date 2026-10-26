@@ -55,10 +55,15 @@ class Report(Contract):
         return self
 
 
+
+def sensitive_source_component(value: str) -> bool:
+    return bool(re.search(r"credential|secret|password|private[-_]?key", value, re.I))
+
+
 def normalize_source_directory(path: str) -> str:
     directory = path.removesuffix('/')
     if (not directory or len(directory) > 255 or not re.fullmatch(r'[A-Za-z0-9_./-]+', directory)
-        or any(not part or part.startswith('.') or re.search(r'(?i)(credential|secret|password|private[-_]?key)', part) for part in directory.split('/'))):
+        or any(not part or part.startswith('.') or sensitive_source_component(part) for part in directory.split('/'))):
         raise ValueError('Source directories must be non-hidden relative paths without traversal, secrets, globs or root access')
     return directory + '/'
 
