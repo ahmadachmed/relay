@@ -35,7 +35,7 @@ export default function KnowledgeReview({runId,refresh,busy,onChanged,onBusy}:{r
  async function action(callback:()=>Promise<Proposal|void>){
   if(actionLock.current||busy)return;
   actionLock.current=true;setLoading(true);setError('');setNotice('');onBusy(true);
-  try {const result=await callback();if(live.current){if(result)choose(result,false);await load();}}
+  try {const result=await callback();if(live.current){if(result){choose(result,false);if(result.status==='applied'){onChanged();setHistory(null);setNotice('Knowledge revision applied or recovered. Run a new analysis to use it.');}}await load();}}
   catch(e){if(live.current)setError(e instanceof Error?e.message:'Knowledge action failed');}
   finally{actionLock.current=false;if(live.current)setLoading(false);onBusy(false);}
  }
@@ -63,7 +63,7 @@ export default function KnowledgeReview({runId,refresh,busy,onChanged,onBusy}:{r
  <label><input type="checkbox" checked={verified} disabled={locked||Boolean(dirty)} onChange={e=>setVerified(e.target.checked)}/>I independently verified the claims for this environment. Activate approved knowledge.</label>
  <button disabled={locked||Boolean(dirty)||!confirmed||!actor.trim()} onClick={()=>void action(async()=>{
    const value=await post<Proposal>(`/api/remote-runs/${runId}/knowledge-proposals/${selected.id}/approve`,{expected_hash:selected.hash,confirmed:true,verified,actor});
-   if(live.current){onChanged();setHistory(null);setNotice(value.status==='applied'?'Knowledge revision applied. Run a new analysis to use it.':'Stored as unverified; active knowledge was not changed.');}
+   if(live.current && value.status!=='applied'){setNotice('Stored as unverified; active knowledge was not changed.');}
    return value;
  })}>{verified?'Approve and activate knowledge':'Store unverified draft'}</button>
  </>}

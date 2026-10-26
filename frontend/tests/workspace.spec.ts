@@ -1004,3 +1004,26 @@ test('knowledge drafts require exact review, separate verification and expose ro
  await page.getByRole('button',{name:'Reject knowledge proposal'}).click();
  await expect(page.getByRole('button',{name:'sut / service-a / bundle rollback · rejected',exact:true})).toBeVisible();
 });
+
+for (const operation of ['reject','edit']) test(`recovered apply on ${operation} invalidates old analysis`,async({page})=>{
+ await fixtures(page,true);
+ const proposal={id:'draft',run_id:id,category:'automation',scope_id:'api',environment:'uat',path:'troubleshooting.md',document_id:'troubleshooting',text:'Reviewed guidance.',rationale:'Hypothesis.',diff:'+Guidance',hash:'a'.repeat(64),base_hash:'b'.repeat(64),base_revision:null,status:'draft',verification:'unverified',artifact_ids:['artifact-one'],operation:'create'};
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ await page.route('**/api/assistant/chat',r=>r.fulfill({json:{run_id:id,answer:{action:'analyze',message:'Earlier analysis.',selection:null,hypotheses:[],bug_report_draft:null},facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false},limitations:[]}}));
+ await page.route('**/knowledge-history?*',r=>r.fulfill({json:{current_hash:'a'.repeat(64),revisions:[{revision:'b'.repeat(32),hash:'c'.repeat(64),actor:'QA',operation:'apply',created_at:'2026-10-26'}]}}));
+ let recovered=false;
+ await page.route('**/knowledge-proposals',r=>r.fulfill({json:[recovered?{...proposal,status:'applied',applied_revision:'new-revision'}:proposal]}));
+ await page.route(`**/knowledge-proposals/draft/${operation}`,r=>{recovered=true;return r.fulfill({json:{...proposal,status:'applied',applied_revision:'new-revision'}});});
+ await page.goto('/ui/');await page.locator('.history-item').first().click();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByText('Observed report summary',{exact:true})).toBeVisible();
+ await page.getByText('Knowledge proposals and history',{exact:true}).click();
+ await page.getByRole('button',{name:'Load knowledge history'}).click();
+ await expect(page.getByRole('button',{name:/Review rollback to/})).toHaveCount(1);
+ await page.getByRole('button',{name:'automation / api / troubleshooting.md · draft',exact:true}).click();
+ if(operation==='edit'){await page.getByLabel('Proposed knowledge',{exact:true}).fill('Edited guidance.');await page.getByRole('button',{name:'Save edited draft for review'}).click();}
+ else await page.getByRole('button',{name:'Reject knowledge proposal'}).click();
+ await expect(page.getByText('Applied revision: new-revision. Earlier analysis provenance remains unchanged.')).toBeVisible();
+ await expect(page.getByText('Observed report summary',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:/Review rollback to/})).toHaveCount(0);
+});
