@@ -45,6 +45,7 @@ class Report(Contract):
 
 
 class Project(Contract):
+    source_files: list[Value] = Field(default_factory=list, max_length=32)
     provider: Name = 'bitbucket'  # Provider availability is checked by the execution layer.
     framework: Value | None = None  # Informational only.
     repository: Annotated[str, Field(pattern=r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
