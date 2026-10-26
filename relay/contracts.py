@@ -6,6 +6,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 Name = Annotated[str, Field(min_length=1, max_length=100, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')]
+SutId = Annotated[str, Field(min_length=1, max_length=100, pattern=r'^[A-Za-z0-9_-]+$')]
 Value = Annotated[str, Field(min_length=1, max_length=256)]
 TestIdentity = Annotated[str, Field(min_length=1)]
 
@@ -30,6 +31,15 @@ class Parameter(Contract):
 
 
 class Pipeline(Contract):
+    sut_ids: list[SutId] = Field(default_factory=list, max_length=16)
+
+    @field_validator('sut_ids')
+    @classmethod
+    def unique_suts(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError('sut_ids must be unique')
+        return values
+
     selector: Name
     parameters: dict[Name, Parameter] = Field(default_factory=dict)
 
@@ -90,6 +100,7 @@ class Registry(Contract):
 
 
 class PlanRequest(Contract):
+    sut_id: SutId | None = None
     project_id: Name
     pipeline_id: Name
     branch: Value | None = None
@@ -97,6 +108,7 @@ class PlanRequest(Contract):
 
 
 class ExecutionPlan(Contract):
+    sut_id: SutId | None = None
     id: str = Field(default_factory=lambda: uuid4().hex)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     project_id: Name
@@ -114,6 +126,8 @@ class ExecutionPlan(Contract):
             raise ValueError('branch is not allowed')
         if self.pipeline_id not in p.pipelines:
             raise ValueError('unknown pipeline')
+        if self.sut_id is not None and self.sut_id not in p.pipelines[self.pipeline_id].sut_ids:
+            raise ValueError('SUT is not allowed for this pipeline')
         specs = p.pipelines[self.pipeline_id].parameters
         if set(self.parameters) - set(specs):
             raise ValueError('unknown pipeline parameter')
