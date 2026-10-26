@@ -77,3 +77,15 @@ def test_valid_repository():
 def test_nul_in_local_root():
     with pytest.raises(ValidationError):
         registry(location='/private/docs\x00tail')
+
+
+@pytest.mark.parametrize('scope', ['_service', '-service', 'service-a'])
+def test_sut_scope_preserves_existing_contract(scope):
+    value = registry(scope_id=scope)
+    assert value.authorize('contract', 'sut', scope, 'uat').scope_id == scope
+
+
+@pytest.mark.parametrize('scope', ['_service', '-service'])
+def test_automation_scope_keeps_name_contract(scope):
+    with pytest.raises(ValidationError):
+        registry(category='automation', scope_id=scope)
