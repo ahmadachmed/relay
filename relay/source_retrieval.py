@@ -43,7 +43,7 @@ class SourceRetrieval:
                         section = extract_operation(snapshot, match[1], match[2], budget)
                     else:
                         section = dict(snapshot, selector='whole document', parser_version='text-v1')
-                    score = len(terms & set(re.findall(r'[a-z0-9_]+', (path+' '+section['text']).lower())))
+                    score = len(terms & set(re.findall(r'[a-z0-9_]+', (path+' '+section['selector']+' '+section['text']).lower())))
                     if score:
                         section.update(source_id=source_id, category=category, scope_id=scope)
                         section['id'] = hashlib.sha256(json.dumps([source_id, category, scope, environment, section['sha256'], section['selector']]).encode()).hexdigest()
