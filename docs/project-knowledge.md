@@ -37,3 +37,41 @@ Observed report summary shows saved run identity and **Project knowledge used**,
 Missing configuration, invalid manifests, blocked paths and failed reads produce diagnostics, not invented context or a fallback to another project. The root path and read exceptions are not exposed to the provider/UI.
 
 Remaining #29 work: immutable repository file access, relevant-code retrieval and source citations, durable source manifests/auditing, stale analysis handling across external document edits, quality evaluation, and reviewed knowledge maintenance. This delivery does not close #29 or #7.
+
+## Scoped knowledge (schema version 2)
+
+Automation and service knowledge have independent roots:
+`automation/<project_id>/` and `sut/<sut_id>/` beneath `RELAY_KNOWLEDGE_ROOT`.
+A pipeline may declare up to 16 unique `sut_ids`. A plan may select one or
+explicitly leave it unset; the selected value is saved in its plan snapshot.
+This identity does not establish which service version was deployed.
+
+New manifests use the following wrapper around the existing document metadata:
+
+```json
+{
+  "schema_version": 2,
+  "category": "sut",
+  "scope_id": "service-a",
+  "documents": []
+}
+```
+
+Each document retains its `path`, `environments`, `verification`, `owner`,
+`source`, `type`, `revision`, `reviewed_at` and approved `sha256`. Do not supply
+`id`: it is derived from the allowlisted filename stem, e.g. `overview.md`
+becomes `overview`. Content edits preserve the document ID but change its
+hash and opaque source ID. Category and scope isolate source identities.
+Existing file, review and size restrictions remain in force.
+
+Legacy `<project_id>/manifest.json` lists remain readable as automation only,
+with their original explicit document/source IDs and a deprecation diagnostic.
+To migrate, move the bundle into `automation/<project_id>/`, wrap the manifest
+in the version-2 object and remove document `id` and `project_id` fields.
+When the new scope exists it takes precedence, even if invalid: old and new
+bundles are never merged and invalid new bundles never fall back silently.
+No removal date for legacy support is set yet.
+
+The category loader and plan contract are backend foundations. Independent
+AI sharing, SUT selection UI and AI-authored knowledge proposals are subsequent
+deliveries under issue #32. Existing AI sharing currently loads automation only.

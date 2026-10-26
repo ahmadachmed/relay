@@ -13,7 +13,7 @@ def resolve_plan(registry: Registry, request: PlanRequest) -> ExecutionPlan:
         raise ValueError('unknown project')
     return ExecutionPlan(
         project_id=request.project_id, pipeline_id=request.pipeline_id,
-        project=project.model_copy(deep=True),
+        project=project.model_copy(deep=True), sut_id=request.sut_id,
         branch=request.branch or project.default_branch,
         parameters=dict(request.parameters),
     )
