@@ -431,3 +431,19 @@ def test_full_provider_payload_budget_includes_schema_and_instructions(harness):
     assert all(model_input_size(c)<=64000 for c in fake.calls)
     assert sum(model_input_size(c) for c in fake.calls)<=100000
     assert model_input_size(fake.calls[0])>len(json.dumps(fake.calls[0]).encode())
+
+
+
+def test_operation_auth_override_does_not_require_unused_auth_dependency(harness):
+    app,client,fake,root,config=harness
+    doc=json.loads((root/'swagger.json').read_text())
+    doc['security']=[{'unused':[]}]
+    doc['components']['securitySchemes']={'unused':{'$ref':'unregistered-auth.json#/Scheme'}}
+    doc['paths']['/voucher/{id}']['get']['security']=[]
+    (root/'swagger.json').write_text(json.dumps(doc))
+    result=post(client,source_ids=['contract'])
+    assert result.status_code==200,result.text
+    assert result.json()['source_manifest']['sources']
+    shared=json.loads(fake.calls[-1]['source_context']['sections'][0]['text'])
+    assert shared['security']==[]
+    assert 'security_definitions' not in shared

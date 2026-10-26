@@ -520,10 +520,12 @@ class SourceSession:
                     walk(child,origin)
         item = root['paths'][endpoint]
         operation = item[method]
-        for value in (operation, item.get('parameters', []),
-                      operation.get('security',root.get('security',[])),
-                      root.get('securityDefinitions',root.get('components',{}).get('securitySchemes',{})),
-                      operation.get('servers',item.get('servers',root.get('servers',[])))):
+        security = operation.get('security',root.get('security',[]))
+        values = [operation, item.get('parameters', []), security,
+                  operation.get('servers',item.get('servers',root.get('servers',[])))]
+        if security:
+            values.append(root.get('securityDefinitions',root.get('components',{}).get('securitySchemes',{})))
+        for value in values:
             walk(value,path)
         if external:
             root['x-relay-external'] = external
