@@ -201,6 +201,12 @@ export default function Workspace() {
   const [runError, setRunError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
   const [busy, setBusy] = useState("");
+  const [aiPendingConversation, setAiPendingConversation] = useState<string | null>(null);
+  const thinkingRef = useRef<HTMLDivElement>(null);
+  const showThinking = busy === "ai" && aiPendingConversation === conversationKey;
+  useEffect(() => {
+    if (showThinking) thinkingRef.current?.scrollIntoView({ block: "nearest" });
+  }, [showThinking]);
   const [online, setOnline] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -671,6 +677,7 @@ export default function Workspace() {
     aiLock.current = true;
     actionLock.current = true;
     setAiError(null);
+    setAiPendingConversation(conversationKey);
     setBusy("ai");
     setError("");
     setAiReply(null);
@@ -719,6 +726,7 @@ export default function Workspace() {
     } finally {
       aiLock.current = false;
       actionLock.current = false;
+      setAiPendingConversation(null);
       setBusy("");
     }
   }
@@ -961,6 +969,18 @@ export default function Workspace() {
                 </div>
               </div>
             ))}
+            {showThinking && (
+              <div className="message relay" ref={thinkingRef} role="status" aria-live="polite" aria-atomic="true">
+                <span className="message-avatar" aria-hidden="true">r</span>
+                <div>
+                  <span className="message-author">Relay</span>
+                  <p className="ai-thinking">
+                    AI is thinking
+                    <span className="thinking-dots" aria-hidden="true"><span /><span /><span /></span>
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
           {aiError && (
             <div className="error-banner" role="alert">

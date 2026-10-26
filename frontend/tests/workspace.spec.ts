@@ -773,12 +773,15 @@ test("late AI response cannot cross runs and request history stays scoped", asyn
   await page.getByRole("textbox",{name:"Structured command"}).fill("analyze A");
   await page.getByRole("button",{name:"Send command"}).click();
   await expect.poll(()=>started).toBe(true);
+  await expect(page.getByRole("status").filter({hasText:"AI is thinking"})).toBeVisible();
   await page.locator(".history-item").nth(1).click();
+  await expect(page.getByRole("status").filter({hasText:"AI is thinking"})).toHaveCount(0);
   release();
   await expect(page.getByText("No conversation for this run yet.")).toBeVisible();
   await expect(page.getByText("AI suggestion: Late response for A",{exact:true})).toHaveCount(0);
   await page.locator(".history-item").first().click();
   await expect(page.getByText("analyze A",{exact:true})).toBeVisible();
+  await expect(page.getByRole("status").filter({hasText:"AI is thinking"})).toHaveCount(0);
 });
 
 test("recovered submission retains originating conversation after reload", async ({page}) => {
@@ -1107,4 +1110,41 @@ test('source and AI sharing changes preserve other run histories',async({page})=
  const history=await retained();
  expect(history['a'.repeat(32)][0].text).toBe('Run A discussion');
  expect(history['b'.repeat(32)][0].text).toBe('Run B discussion');
+});
+
+test("AI thinking appears during requests, clears on failure and returns for retry", async ({page}) => {
+  await fixtures(page, true);
+  await page.setViewportSize({width:390,height:844});
+  await page.emulateMedia({reducedMotion:"reduce"});
+  await page.route("**/api/assistant", r => r.fulfill({json:{enabled:true,configured:true}}));
+  let release!: () => void;
+  let calls = 0;
+  await page.route("**/api/assistant/chat", async r => {
+    const attempt = ++calls;
+    await new Promise<void>(resolve => {release = resolve;});
+    await (attempt === 1
+      ? r.fulfill({status:502,json:{detail:"Model unavailable"}})
+      : r.fulfill({json:{answer:{action:"clarify",message:"Ready to help.",selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]}}));
+  });
+  await page.goto("/ui/");
+  const thinking = page.getByRole("status").filter({hasText:"AI is thinking"});
+  await expect(thinking).toHaveCount(0);
+  await page.locator("details.ai-sharing").evaluate(el => {(el as HTMLDetailsElement).open = true;});
+  await page.getByLabel("Send chat, recent conversation, configured context and selected run summary to AI").check();
+  await page.getByRole("textbox",{name:"Structured command"}).fill("Help with this check");
+  await page.getByRole("button",{name:"Send command"}).click();
+  await expect.poll(() => calls).toBe(1);
+  await expect(thinking).toBeInViewport();
+  await expect(page.getByRole("button",{name:"Send command"})).toBeDisabled();
+  expect(await thinking.locator(".thinking-dots span").first().evaluate(el => getComputedStyle(el).animationName)).toBe("none");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  release();
+  await expect(page.getByRole("button",{name:"Retry AI message"})).toBeVisible();
+  await expect(thinking).toHaveCount(0);
+  await page.getByRole("button",{name:"Retry AI message"}).click();
+  await expect.poll(() => calls).toBe(2);
+  await expect(thinking).toBeInViewport();
+  release();
+  await expect(page.getByText("AI suggestion: Ready to help.",{exact:true})).toBeVisible();
+  await expect(thinking).toHaveCount(0);
 });
