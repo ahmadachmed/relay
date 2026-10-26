@@ -72,10 +72,12 @@ def _extract_operation(snapshot, method, path, max_bytes):
     result = {'operation': operation, 'path_parameters': item.get('parameters', []),
               'security': operation.get('security', document.get('security', [])), 'references': {}}
     if document.get('swagger') == '2.0':
-        result['transport'] = {key: document[key] for key in ('host', 'basePath', 'schemes') if key in document}
+        result['transport'] = {key: document[key] for key in ('host', 'basePath') if key in document}
         for key in ('consumes', 'produces', 'schemes'):
             if key in operation or key in document:
                 result[key] = operation.get(key, document.get(key))
+        if 'schemes' in result:
+            result['transport']['schemes'] = result['schemes']
     else:
         result['servers'] = operation.get('servers', item.get('servers', document.get('servers', [{'url': '/'}])))
     pending = [result.get('servers', []), result['operation'], result['path_parameters'], result['security']]
@@ -92,14 +94,18 @@ def _extract_operation(snapshot, method, path, max_bytes):
         if isinstance(value, dict):
             ref = value.get('$ref')
             if ref is not None:
-                if not isinstance(ref, str) or not ref.startswith('#/'):
+                if not isinstance(ref, str) or not ref.startswith('#'):
                     raise ValueError('External references are unsupported')
                 if ref not in result['references']:
                     target = document
                     try:
                         if re.search(r'%(?![0-9A-Fa-f]{2})', ref):
                             raise ValueError('Invalid reference encoding')
-                        for part in unquote(ref[2:], errors='strict').split('/'):
+                        pointer = unquote(ref[1:], errors='strict')
+                        if pointer and not pointer.startswith('/'):
+                            raise ValueError('Invalid local pointer')
+                        parts = pointer[1:].split('/') if pointer else []
+                        for part in parts:
                             if re.search(r'~(?![01])', part):
                                 raise ValueError('Invalid pointer escape')
                             part = part.replace('~1', '/').replace('~0', '~')
