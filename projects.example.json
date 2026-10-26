@@ -36,7 +36,10 @@
               ],
               "default": "1"
             }
-          }
+          },
+          "sut_ids": [
+            "service-a"
+          ]
         }
       },
       "framework": "robot_api",

@@ -15,6 +15,7 @@ from .execution import ExecutionService, PlanError
 from .monitoring import RunMonitor
 from .evidence import EvidenceStore
 from .source_context import SourceContext
+from .knowledge_proposals import DraftEdit, Approval, RollbackDraft, ProposalReference
 from .report_evidence import MAX_REPORT_BYTES
 from uuid import UUID
 from pydantic import model_validator
@@ -85,6 +86,30 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     @app.exception_handler(ProviderError)
     async def provider_error(request, exc):
         return JSONResponse({'detail': {'code': exc.code, 'message': str(exc)}}, status_code=502)
+
+    @app.get('/api/remote-runs/{run_id}/knowledge-proposals')
+    def knowledge_proposals(run_id: str):
+        return assistant.knowledge_proposals.list(run_id)
+
+    @app.post('/api/remote-runs/{run_id}/knowledge-proposals/{proposal_id}/edit')
+    def edit_knowledge(run_id: str, proposal_id: str, body: DraftEdit):
+        return assistant.knowledge_proposals.edit(run_id, proposal_id, body)
+
+    @app.post('/api/remote-runs/{run_id}/knowledge-proposals/{proposal_id}/reject')
+    def reject_knowledge(run_id: str, proposal_id: str, body: ProposalReference):
+        return assistant.knowledge_proposals.reject(run_id, proposal_id, body.expected_hash)
+
+    @app.post('/api/remote-runs/{run_id}/knowledge-proposals/{proposal_id}/approve')
+    def approve_knowledge(run_id: str, proposal_id: str, body: Approval):
+        return assistant.knowledge_proposals.approve(run_id, proposal_id, body)
+
+    @app.get('/api/remote-runs/{run_id}/knowledge-history')
+    def knowledge_history(run_id: str, category: str = Query(pattern='^(automation|sut)$')):
+        return assistant.knowledge_proposals.history(run_id, category)
+
+    @app.post('/api/remote-runs/{run_id}/knowledge-rollback')
+    def rollback_knowledge(run_id: str, body: RollbackDraft):
+        return assistant.knowledge_proposals.rollback_draft(run_id, body)
 
     @app.post('/api/plans/preview')
     async def preview_plan(body: PlanRequest):

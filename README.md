@@ -80,3 +80,8 @@ Build the Next.js frontend and serve it from the Python backend: see [workspace 
 ## Optional AI conversation
 
 See [assistant setup, sharing controls and limits](docs/assistant.md) and [private project knowledge setup](docs/project-knowledge.md). AI proposes configured context and analyzes evidence; execution and cancellation retain explicit UI confirmation. Disabled by default.
+
+Approved automation/SUT knowledge can be shared independently. AI knowledge
+proposals remain private drafts until exact-content review and explicit approval;
+unverified storage never activates a hypothesis. See the [local knowledge acceptance
+steps and revision/rollback workflow](docs/project-knowledge.md#reviewed-ai-proposals-revisions-and-rollback).
