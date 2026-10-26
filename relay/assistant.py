@@ -328,10 +328,14 @@ class Assistant:
             if request.propose_knowledge:
                 for category, consent in [('automation', automation_consent), ('sut', request.include_sut_knowledge)]:
                     if consent:
+                        if category == 'sut' and not saved_plan.get('sut_id'):
+                            # Sharing preferences are global; old runs may only
+                            # have automation identity. Keep that category usable.
+                            continue
                         scope, _ = self.knowledge_proposals.scope(request.run_id, category)
                         proposal_bases[category] = self.knowledge_proposals.snapshot(category, scope)
                 if not proposal_bases:
-                    raise PlanError('knowledge_consent', 'Enable sharing for at least one knowledge category before requesting a proposal.', 422)
+                    raise PlanError('knowledge_consent', 'Enable sharing for a knowledge category available on this run. SUT proposals require a saved SUT identity.', 422)
             previous = None
             if request.previous_proposal:
                 try:

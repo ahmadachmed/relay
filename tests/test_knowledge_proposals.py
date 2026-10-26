@@ -290,3 +290,19 @@ def test_mutations_recover_committed_proposal(proposals, monkeypatch, operation)
     with store.execution.connect() as db:
         assert store.get(db, RUN, proposal['id'])['status'] == 'applied'
     assert len(store.history(RUN, 'sut')['revisions']) == 3
+
+
+def test_automation_proposal_on_old_run_with_both_sharing_preferences(harness, monkeypatch, tmp_path):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    monkeypatch.setenv('RELAY_KNOWLEDGE_ROOT', str(tmp_path))
+    fake.result = answer(action='analyze', knowledge_suggestion=dict(category='automation',path='troubleshooting.md',text='Setup failures may block dependent tests.',rationale='Tentative guidance.',artifact_ids=[ART]))
+    response = post(client, run_id=RUN, include_failure_details=True, include_automation_knowledge=True, include_sut_knowledge=True, propose_knowledge=True)
+    assert response.status_code == 200, response.text
+    assert response.json()['knowledge_proposal']['category'] == 'automation'
+    assert fake.calls[-1]['knowledge_proposal_request']['categories'] == ['automation']
+    assert 'no SUT identity' in response.json()['facts']['sut_knowledge']['diagnostics'][0]
+    before = len(fake.calls)
+    response = post(client, run_id=RUN, include_failure_details=True, include_sut_knowledge=True, propose_knowledge=True)
+    assert response.status_code == 422
+    assert len(fake.calls) == before
