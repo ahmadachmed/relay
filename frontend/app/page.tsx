@@ -35,7 +35,9 @@ import {
   type Run,
 } from "../lib/api";
 
+type Knowledge = {sources:{id:string;category?:string;scope_id?:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]};
 type Context = {
+  sut_id?: string | null;
   project: string;
   pipeline: string;
   branch: string;
@@ -62,8 +64,9 @@ type AiReply = {
     test_status: string;
     counts: Record<string, number>;
     attempts_known: boolean;
-    identity?: {project_id:string; framework:string; repository:string; branch:string; commit:string};
-    knowledge?: {sources:{id:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]} | null;
+    identity?: {sut_id?:string|null;project_id:string; framework:string; repository:string; branch:string; commit:string};
+    knowledge?: Knowledge | null;
+    sut_knowledge?: Knowledge | null;
     analysis_limitations?: string[];
     can_analyze_failure_details?: boolean;
   } | null;
@@ -115,6 +118,8 @@ export default function Workspace() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [shareAi, setShareAi] = useState(true);
   const [shareFailures, setShareFailures] = useState(true);
+  const [shareSutKnowledge, setShareSutKnowledge] = useState(false);
+  const [savedSut, setSavedSut] = useState<string | null>(null);
   const [shareKnowledge, setShareKnowledge] = useState(false);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [replies, setReplies] = useState<Record<string, AiReply | null>>({});
@@ -133,15 +138,17 @@ export default function Workspace() {
     setShareAi(storage.get("shareAi") !== "false");
     setShareFailures(storage.get("shareFailures") !== "false");
     setShareKnowledge(storage.get("shareKnowledge") === "true");
+    setShareSutKnowledge(storage.get("shareSutKnowledge") === "true");
     setPreferencesReady(true);
   }, []);
   useEffect(() => {
     if (preferencesReady) {
+      storage.set("shareSutKnowledge", String(shareSutKnowledge));
       storage.set("shareKnowledge", String(shareKnowledge));
       storage.set("shareAi", String(shareAi));
       storage.set("shareFailures", String(shareFailures));
     }
-  }, [shareAi, shareFailures, shareKnowledge, preferencesReady]);
+  }, [shareAi, shareFailures, shareKnowledge, shareSutKnowledge, preferencesReady]);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [context, setContext] = useState<Context>({
     project: "",
@@ -292,6 +299,7 @@ export default function Workspace() {
           );
           setContext({
             ...restored,
+            sut_id: p.pipelines[restored.pipeline].sut_ids?.includes(restored.sut_id || "") ? restored.sut_id : null,
             parameters: { ...defaults(p, restored.pipeline), ...parameters },
           });
         } else if (first) {
@@ -356,6 +364,7 @@ export default function Workspace() {
     setPlan(null);
     setError("");
     setRun(null);
+    setSavedSut(null);
     setEvidence(null);
     setRunError("");
     setEvidenceError("");
@@ -402,6 +411,7 @@ export default function Workspace() {
         api<Plan>(`/api/plans/${encodeURIComponent(id)}`),
       ]);
       if (activeRun.current === id) {
+        setSavedSut(savedPlan.plan.sut_id || null);
         setEvidence(value);
         setEvidenceError("");
         setReportPath((old) =>
@@ -460,6 +470,7 @@ export default function Workspace() {
       const value = await post<Plan>("/api/plans/preview", {
         project_id: context.project,
         pipeline_id: context.pipeline,
+        sut_id: context.sut_id || null,
         branch: context.branch,
         parameters: context.parameters,
       });
@@ -635,7 +646,8 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
-        include_project_knowledge: Boolean(selected) && shareKnowledge,
+        include_automation_knowledge: Boolean(selected) && shareKnowledge,
+        include_sut_knowledge: Boolean(selected) && shareSutKnowledge,
         analysis_context: selected && analysisInput.share ? {expected_behavior:analysisInput.expected_behavior, test_code:analysisInput.test_code, environment_notes:analysisInput.environment_notes} : null,
         previous_proposal: proposals.current[conversationKey] || null,
         context: project?.enabled && pipeline && context.branch
@@ -777,7 +789,7 @@ export default function Workspace() {
                   <ChevronRight size={13} />
                 </div>
                 <small>
-                  {r.id.slice(0, 10)} · {r.pipeline_status}
+                  {r.id.slice(0, 10)} · {r.pipeline_status} · SUT: {r.sut_id || "None"}
                 </small>
               </button>
             ))
@@ -989,7 +1001,7 @@ export default function Workspace() {
                   <details open>
                     <summary>Observed report summary</summary>
                     {aiReply.facts.identity && <p>Analyzed run: {aiReply.facts.identity.project_id} · {aiReply.facts.identity.framework} · {aiReply.facts.identity.branch} · commit {aiReply.facts.identity.commit}</p>}
-                    {aiReply.facts.knowledge && <section aria-label="Project knowledge used"><h3>Project knowledge used</h3><p>Operator-maintained sources; document text is not shown here. A new AI request reloads the configured files.</p><ul>{aiReply.facts.knowledge.sources.map(source=><li key={source.id}>{source.document_id} · {source.path} · revision {source.revision} · SHA256 {source.sha256} · reviewed {source.reviewed_at}</li>)}</ul><ul>{aiReply.facts.knowledge.diagnostics.map((item,i)=><li key={i}>{item}</li>)}</ul></section>}
+                    {([['Automation', aiReply.facts.knowledge], ['SUT', aiReply.facts.sut_knowledge]] as const).map(([category, bundle]) => bundle && <section key={category} aria-label={`${category} knowledge used`}><h3>{category} knowledge used</h3><p>Operator-maintained references, not runtime evidence.</p><ul>{bundle.sources.map(source => <li key={source.id}>{source.category || category} · {source.scope_id || aiReply.facts?.identity?.project_id} · {source.document_id} · revision {source.revision} · SHA256 {source.sha256} · reviewed {source.reviewed_at}</li>)}</ul><ul>{bundle.diagnostics.map((item,i) => <li key={i}>{item}</li>)}</ul></section>)}
                     {aiReply.facts.analysis_limitations && <>
                       <p>{aiReply.facts.can_analyze_failure_details ? "Available failure details can be analyzed with these limits." : "Analysis uses only available shared report data."}</p>
                       <ul>{aiReply.facts.analysis_limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul>
@@ -1080,7 +1092,7 @@ export default function Workspace() {
                 <div>
                   <dt>PROJECT / PIPELINE</dt>
                   <dd>
-                    {plan.plan.project_id} / {plan.plan.pipeline_id}
+                    {plan.plan.project_id} / {plan.plan.pipeline_id} · SUT: {plan.plan.sut_id || "None"}
                   </dd>
                 </div>
                 <div>
@@ -1484,7 +1496,7 @@ export default function Workspace() {
             <button disabled={Boolean(busy)} onClick={()=>updateAnalysisInput({expected_behavior:"",test_code:"",environment_notes:"",share:false})}>Clear analysis context</button>
           </details>}
           {aiEnabled && (
-            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{setShareKnowledge(e.target.checked);setAiReply(null);setAiError(null);}}/>Include approved project knowledge for the selected run</label><p>Off by default. When enabled, applicable private project documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
+            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
               <label>
                 <input
                   type="checkbox"
@@ -1511,6 +1523,7 @@ export default function Workspace() {
             </details>
           )}
 
+        {selected && <p aria-label="Selected run SUT">Selected run SUT: {savedSut || "None"}</p>}
         <p className="context-description">
           Execution selection for a new plan. Analysis uses the selected run’s saved project and commit.
         </p>
@@ -1564,6 +1577,7 @@ export default function Workspace() {
                   changeContext({
                     ...context,
                     pipeline: key,
+                    sut_id: null,
                     parameters: defaults(project, key),
                   });
               }}
@@ -1573,6 +1587,7 @@ export default function Workspace() {
               ))}
             </select>
           </label>
+          {Boolean(pipeline?.sut_ids?.length) && <label>System under test<select aria-label="System under test" value={context.sut_id || ""} onChange={e=>changeContext({...context,sut_id:e.target.value || null})}><option value="">Without SUT context</option>{pipeline?.sut_ids?.map(id=><option key={id} value={id}>{id}</option>)}</select></label>}
           <div className="parameter-heading">
             PARAMETERS<span>From project configuration</span>
           </div>

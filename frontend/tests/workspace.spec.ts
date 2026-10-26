@@ -889,18 +889,49 @@ test('additional analysis context is opt-in and isolated between runs', async ({
 
 test('project knowledge is opt-in, persisted and shows saved run provenance', async({page})=>{
  await fixtures(page,true);
+ await page.route(`**/api/plans/${id}`, r=>r.fulfill({json:{...pinned,status:'submitted',pipeline:run.pipeline,plan:{...pinned.plan,sut_id:'service-a'}}}));
  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
  const requests:any[]=[];
- await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'analyze',message:'Reviewed.',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false,identity:{project_id:'api',framework:'robot_api',repository:'example/api',branch:'main',commit:'f'.repeat(40)},knowledge:{sources:[{id:'doc',document_id:'overview',path:'overview.md',revision:'1',sha256:'hash',reviewed_at:'2026-10-26'}],diagnostics:['Some documents omitted.']}},limitations:[]}});});
+ await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'analyze',message:'Reviewed.',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false,identity:{project_id:'api',framework:'robot_api',repository:'example/api',branch:'main',commit:'f'.repeat(40)},sut_knowledge:{sources:[{id:'sut-doc',category:'sut',scope_id:'service-a',document_id:'business-rules',path:'business-rules.md',revision:'2',sha256:'sut-hash',reviewed_at:'2026-10-26'}],diagnostics:['SUT diagnostic.']},knowledge:{sources:[{id:'doc',document_id:'overview',path:'overview.md',revision:'1',sha256:'hash',reviewed_at:'2026-10-26'}],diagnostics:['Some documents omitted.']}},limitations:[]}});});
  await page.goto('/ui/');
  await page.locator('.history-item').first().click();
  await page.getByText('Settings · AI context sharing',{exact:true}).click();
- const sharing=page.getByLabel('Include approved project knowledge for the selected run');
- await expect(sharing).not.toBeChecked();await sharing.check();
+ const sharing=page.getByLabel('Include approved automation knowledge for the selected run');
+ await expect(sharing).not.toBeChecked();
+ const sutSharing=page.getByLabel('Include approved SUT knowledge for the selected run');
+ await expect(sutSharing).not.toBeChecked();
+ await sharing.check();await sutSharing.check();
  await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');
  await page.getByRole('button',{name:'Send command'}).click();
- await expect(page.getByRole('region',{name:'Project knowledge used'})).toContainText('revision 1');
- expect(requests[0].include_project_knowledge).toBe(true);
+ await expect(page.getByRole('region',{name:'Automation knowledge used'})).toContainText('revision 1');
+ expect(requests[0].include_automation_knowledge).toBe(true);
+ expect(requests[0].include_sut_knowledge).toBe(true);
+ await expect(page.getByRole('region',{name:'SUT knowledge used'})).toContainText('service-a');
+ await expect(page.getByLabel('Selected run SUT')).toContainText('service-a');
+ await sutSharing.uncheck();
+ await expect(page.getByRole('region',{name:'SUT knowledge used'})).toHaveCount(0);
+ await sutSharing.check();
  await page.reload();await page.getByText('Settings · AI context sharing',{exact:true}).click();
  await expect(sharing).toBeChecked();
+ await expect(sutSharing).toBeChecked();
+ await sharing.uncheck();
+ await expect(sutSharing).toBeChecked();
+});
+
+test('SUT selection is explicit, previewed and reset for another pipeline', async ({page}) => {
+ await fixtures(page);
+ await page.route('**/api/project-registry', r=>r.fulfill({json:{projects:{api:{...project,pipelines:{smoke:{selector:'smoke-tests',parameters,sut_ids:['service-a','service-b']},other:{selector:'other',parameters}}}}}}));
+ let selection: any;
+ await page.route('**/api/plans/preview',r=>{selection=r.request().postDataJSON();return r.fulfill({json:{...pinned,plan:{...pinned.plan,sut_id:selection.sut_id}}});});
+ await page.goto('/ui/');
+ const sut=page.getByRole('combobox',{name:'System under test'});
+ await expect(sut).toHaveValue('');
+ await sut.selectOption('service-a');
+ await page.getByRole('button',{name:'Preview plan',exact:true}).click();
+ await expect.poll(()=>selection?.sut_id).toBe('service-a');
+ await expect(page.getByText(/SUT: service-a/).first()).toBeVisible();
+ await page.getByRole('combobox',{name:'Pipeline',exact:true}).selectOption('other');
+ await expect(sut).toHaveCount(0);
+ await page.getByRole('combobox',{name:'Pipeline',exact:true}).selectOption('smoke');
+ await expect(sut).toHaveValue('');
 });

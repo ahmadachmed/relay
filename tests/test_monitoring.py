@@ -313,3 +313,15 @@ def test_interrupted_cancel_is_not_reposted_on_restart(tmp_path):
     assert result['cancel_status'] == 'unknown'
     assert result['pipeline_status'] == 'running'
     assert calls == ['GET', 'GET']
+
+
+def test_history_sut_comes_from_saved_plan_for_existing_runs(tmp_path):
+    execution, plan, monitor = setup(tmp_path)
+    monitor.adopt()
+    saved = execution.get(plan['id'])
+    saved['plan']['sut_id'] = 'service-a'
+    execution.save(saved)
+    assert monitor.list()[0]['sut_id'] == 'service-a'
+    saved['plan'].pop('sut_id')
+    execution.save(saved)
+    assert monitor.list()[0]['sut_id'] is None

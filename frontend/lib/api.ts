@@ -13,7 +13,7 @@ export type Project = {
   enabled: boolean;
   pipelines: Record<
     string,
-    { selector: string; parameters: Record<string, Parameter> }
+    { sut_ids?: string[]; selector: string; parameters: Record<string, Parameter> }
   >;
   reports: { format: string; path: string }[];
 };
@@ -28,6 +28,7 @@ export type Plan = {
   error: string | null;
   pipeline: { uuid: string; url: string } | null;
   plan: {
+    sut_id?: string | null;
     project_id: string;
     pipeline_id: string;
     branch: string;
@@ -36,6 +37,7 @@ export type Plan = {
   };
 };
 export type Run = {
+  sut_id?: string | null;
   id: string;
   project_id: string;
   pipeline: { uuid: string; url: string };
