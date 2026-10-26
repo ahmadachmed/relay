@@ -10,7 +10,7 @@ import yaml
 from .knowledge import read_file
 
 
-def read_local(source, path, max_bytes=None):
+def read_local(source, path, max_bytes=None, byte_counter=None):
     if source.provider != 'local' or not source.enabled or path not in source.files:
         raise ValueError('Source file unavailable')
     limit = source.max_file_bytes if max_bytes is None else min(source.max_file_bytes, max_bytes)
@@ -24,7 +24,7 @@ def read_local(source, path, max_bytes=None):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = child
-        body = read_file(fd, path.split('/')[-1], limit)
+        body = read_file(fd, path.split('/')[-1], limit, byte_counter=byte_counter)
     finally:
         os.close(fd)
     text = body.decode('utf-8')

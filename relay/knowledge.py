@@ -11,12 +11,14 @@ MAX_FILE = 8000
 MAX_TOTAL = 20000
 
 
-def read_file(directory, name, limit):
+def read_file(directory, name, limit, byte_counter=None):
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
     with os.fdopen(fd, 'rb') as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError('Not a regular file')
         body = stream.read(limit + 1)
+        if byte_counter is not None:
+            byte_counter(len(body))
     if len(body) > limit:
         raise ValueError('File exceeds budget')
     return body

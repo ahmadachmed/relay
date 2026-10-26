@@ -33,16 +33,25 @@ class SourceRetrieval:
                         diagnostics.append('Source search byte limit reached.')
                         break
                     allowance = min(source.max_file_bytes, 2000000 - total)
-                    total += allowance
-                    snapshot = read_local(source, path, max_bytes=allowance)
-                    total -= allowance - len(snapshot['text'].encode())
+                    def count_bytes(size):
+                        nonlocal total
+                        total += size
+                    snapshot = read_local(source, path, max_bytes=allowance, byte_counter=count_bytes)
                     if source.format == 'openapi':
                         # Use the bounded extractor for explicit method/path questions.
                         match = re.search(r'\b(get|post|put|patch|delete|head|options|trace)\s+(/[^\s]+)', query, re.I)
                         if not match:
                             diagnostics.append('OpenAPI retrieval requires an explicit method and path.')
                             continue
-                        section = extract_operation(snapshot, match[1], match[2], budget)
+                        endpoint = match[2]
+                        # Prefer the literal path; only retry prose delimiters on lookup failure.
+                        try:
+                            section = extract_operation(snapshot, match[1], endpoint, budget)
+                        except ValueError as exc:
+                            if str(exc) != 'Operation unavailable':
+                                raise
+                            endpoint = endpoint.rstrip('`.,;!?)]}')
+                            section = extract_operation(snapshot, match[1], endpoint, budget)
                     else:
                         section = dict(snapshot, selector='whole document', parser_version='text-v1')
                     score = len(terms & set(re.findall(r'[a-z0-9_]+', (path+' '+section['selector']+' '+section['text']).lower())))
