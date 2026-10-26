@@ -14,6 +14,7 @@ from .contracts import PlanRequest, Contract
 from .execution import ExecutionService, PlanError
 from .monitoring import RunMonitor
 from .evidence import EvidenceStore
+from .source_context import SourceContext
 from .report_evidence import MAX_REPORT_BYTES
 from uuid import UUID
 from pydantic import model_validator
@@ -31,6 +32,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     monitor = RunMonitor(execution)
     evidence_store = EvidenceStore(execution, monitor)
     assistant = Assistant(registry, monitor, evidence_store)
+    source_context = SourceContext(execution, monitor, registry)
 
 
     @asynccontextmanager
@@ -50,6 +52,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     app.state.execution = execution
     app.state.monitor = monitor
     app.state.assistant = assistant
+    app.state.source_context = source_context
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -110,6 +113,16 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     @app.post('/api/assistant/chat')
     async def assistant_chat(body: ChatRequest):
         return await assistant.chat(body)
+
+    class SourcePreview(Contract):
+        path: str = Field(min_length=1, max_length=300)
+        confirmed: bool
+
+    @app.post('/api/remote-runs/{run_id}/source-preview')
+    async def preview_source(run_id: str, body: SourcePreview):
+        if body.confirmed is not True:
+            raise HTTPException(422, 'Confirm reading the selected source file.')
+        return await source_context.preview(run_id, body.path)
 
     @app.get('/api/remote-runs')
     def remote_runs(limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):

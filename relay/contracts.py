@@ -1,8 +1,9 @@
 """Versioned contracts for pipeline orchestration, independent of local execution."""
 from datetime import datetime, timezone
+import re
 from typing import Literal, Annotated
 from uuid import uuid4
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 Name = Annotated[str, Field(min_length=1, max_length=100, pattern=r'^[a-zA-Z0-9][a-zA-Z0-9_.-]*$')]
 Value = Annotated[str, Field(min_length=1, max_length=256)]
@@ -44,7 +45,26 @@ class Report(Contract):
         return self
 
 
+def normalize_source_directory(path: str) -> str:
+    directory = path.removesuffix('/')
+    if (not directory or len(directory) > 255 or not re.fullmatch(r'[A-Za-z0-9_./-]+', directory)
+        or any(not part or part.startswith('.') or re.search(r'(?i)(credential|secret|password|private[-_]?key)', part) for part in directory.split('/'))):
+        raise ValueError('Source directories must be non-hidden relative paths without traversal, secrets, globs or root access')
+    return directory + '/'
+
+
 class Project(Contract):
+    source_directories: list[Value] = Field(default_factory=list, max_length=32)
+
+    @field_validator('source_directories')
+    @classmethod
+    def valid_source_directories(cls, paths):
+        normalized = [normalize_source_directory(path) for path in paths]
+        if len(normalized) != len(set(normalized)):
+            raise ValueError('Source directories must be unique')
+        return normalized
+
+    source_files: list[Value] = Field(default_factory=list, max_length=32)
     provider: Name = 'bitbucket'  # Provider availability is checked by the execution layer.
     framework: Value | None = None  # Informational only.
     repository: Annotated[str, Field(pattern=r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')]
