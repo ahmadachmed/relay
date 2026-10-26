@@ -29,14 +29,16 @@ class SourceRetrieval:
                     diagnostics.append('Source file search limit reached.')
                     break
                 try:
-                    snapshot = read_local(source, path)
-                    total += len(snapshot['text'].encode())
-                    if total > 2000000:
+                    if total >= 2000000:
                         diagnostics.append('Source search byte limit reached.')
                         break
+                    allowance = min(source.max_file_bytes, 2000000 - total)
+                    total += allowance
+                    snapshot = read_local(source, path, max_bytes=allowance)
+                    total -= allowance - len(snapshot['text'].encode())
                     if source.format == 'openapi':
                         # Use the bounded extractor for explicit method/path questions.
-                        match = re.search(r'\b(get|post|put|patch|delete|head|options)\s+(/[^\s]+)', query, re.I)
+                        match = re.search(r'\b(get|post|put|patch|delete|head|options|trace)\s+(/[^\s]+)', query, re.I)
                         if not match:
                             diagnostics.append('OpenAPI retrieval requires an explicit method and path.')
                             continue
@@ -46,7 +48,7 @@ class SourceRetrieval:
                     score = len(terms & set(re.findall(r'[a-z0-9_]+', (path+' '+section['selector']+' '+section['text']).lower())))
                     if score:
                         section.update(source_id=source_id, category=category, scope_id=scope)
-                        section['id'] = hashlib.sha256(json.dumps([source_id, category, scope, environment, section['sha256'], section['selector']]).encode()).hexdigest()
+                        section['id'] = hashlib.sha256(json.dumps([source_id, category, scope, environment, section['path'], section['sha256'], section['selector'], section['parser_version']]).encode()).hexdigest()
                         candidates.append((score, source_id, path, section))
                 except (OSError, ValueError, UnicodeError):
                     diagnostics.append('Source unavailable, unsupported or exceeds retrieval limits.')

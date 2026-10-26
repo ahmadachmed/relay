@@ -25,3 +25,33 @@ def test_explicit_operation(tmp_path):
     registry=SourceRegistry.model_validate({'sources':{'api':dict(category='sut',scope_id='service',environments=['uat'],provider='local',location=str(tmp_path),files=['spec.json'],format='openapi')}})
     result=SourceRetrieval(registry).retrieve('sut','service','uat','GET /voucher')
     assert result['sources'][0]['selector']=='GET /voucher'
+
+
+def test_identical_files_have_distinct_section_ids(tmp_path):
+    for name in ('a.md', 'b.md'):
+        (tmp_path / name).write_text('Voucher rules')
+    registry = SourceRegistry.model_validate({'sources': {'docs': dict(category='sut', scope_id='service', environments=['uat'], provider='local', location=str(tmp_path), files=['a.md', 'b.md'], format='text')}})
+    sections = SourceRetrieval(registry).retrieve('sut', 'service', 'uat', 'voucher')['sources']
+    assert len(sections) == 2
+    assert sections[0]['id'] != sections[1]['id']
+
+
+def test_read_budget_applies_before_loading(tmp_path, monkeypatch):
+    import relay.source_retrieval as module
+    calls = []
+    def reader(source, path, max_bytes=None):
+        calls.append(max_bytes)
+        raise ValueError('File exceeds budget')
+    monkeypatch.setattr(module, 'read_local', reader)
+    registry = SourceRegistry.model_validate({'sources': {'docs': dict(category='sut', scope_id='service', environments=['uat'], provider='local', location=str(tmp_path), files=['a.txt', 'b.txt'], format='text', max_file_bytes=5000000)}})
+    result = SourceRetrieval(registry).retrieve('sut', 'service', 'uat', 'voucher')
+    assert calls == [2000000]
+    assert result['sources'] == []
+    assert 'Source search byte limit reached.' in result['diagnostics']
+
+
+def test_trace_operation(tmp_path):
+    (tmp_path / 'spec.json').write_text(json.dumps({'openapi': '3.0.0', 'paths': {'/voucher': {'trace': {'responses': {'200': {'description': 'OK'}}}}}}))
+    registry = SourceRegistry.model_validate({'sources': {'api': dict(category='sut', scope_id='service', environments=['uat'], provider='local', location=str(tmp_path), files=['spec.json'], format='openapi')}})
+    result = SourceRetrieval(registry).retrieve('sut', 'service', 'uat', 'TRACE /voucher')
+    assert result['sources'][0]['selector'] == 'TRACE /voucher'

@@ -10,9 +10,12 @@ import yaml
 from .knowledge import read_file
 
 
-def read_local(source, path):
+def read_local(source, path, max_bytes=None):
     if source.provider != 'local' or not source.enabled or path not in source.files:
         raise ValueError('Source file unavailable')
+    limit = source.max_file_bytes if max_bytes is None else min(source.max_file_bytes, max_bytes)
+    if limit < 1:
+        raise ValueError('Source read budget exhausted')
     fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
     try:
         for part in source.location.split('/')[1:] + path.split('/')[:-1]:
@@ -21,7 +24,7 @@ def read_local(source, path):
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             os.close(fd)
             fd = child
-        body = read_file(fd, path.split('/')[-1], source.max_file_bytes)
+        body = read_file(fd, path.split('/')[-1], limit)
     finally:
         os.close(fd)
     text = body.decode('utf-8')
