@@ -62,6 +62,8 @@ type AiReply = {
     test_status: string;
     counts: Record<string, number>;
     attempts_known: boolean;
+    identity?: {project_id:string; framework:string; repository:string; branch:string; commit:string};
+    knowledge?: {sources:{id:string;document_id:string;path:string;revision:string;sha256:string;reviewed_at:string}[];diagnostics:string[]} | null;
     analysis_limitations?: string[];
     can_analyze_failure_details?: boolean;
   } | null;
@@ -113,6 +115,7 @@ export default function Workspace() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [shareAi, setShareAi] = useState(true);
   const [shareFailures, setShareFailures] = useState(true);
+  const [shareKnowledge, setShareKnowledge] = useState(false);
   const [preferencesReady, setPreferencesReady] = useState(false);
   const [replies, setReplies] = useState<Record<string, AiReply | null>>({});
 
@@ -129,14 +132,16 @@ export default function Workspace() {
   useEffect(() => {
     setShareAi(storage.get("shareAi") !== "false");
     setShareFailures(storage.get("shareFailures") !== "false");
+    setShareKnowledge(storage.get("shareKnowledge") === "true");
     setPreferencesReady(true);
   }, []);
   useEffect(() => {
     if (preferencesReady) {
+      storage.set("shareKnowledge", String(shareKnowledge));
       storage.set("shareAi", String(shareAi));
       storage.set("shareFailures", String(shareFailures));
     }
-  }, [shareAi, shareFailures, preferencesReady]);
+  }, [shareAi, shareFailures, shareKnowledge, preferencesReady]);
   const [registry, setRegistry] = useState<Registry | null>(null);
   const [context, setContext] = useState<Context>({
     project: "",
@@ -630,6 +635,7 @@ export default function Workspace() {
         message: text,
         share_context: true,
         include_failure_details: shareFailures,
+        include_project_knowledge: Boolean(selected) && shareKnowledge,
         analysis_context: selected && analysisInput.share ? {expected_behavior:analysisInput.expected_behavior, test_code:analysisInput.test_code, environment_notes:analysisInput.environment_notes} : null,
         previous_proposal: proposals.current[conversationKey] || null,
         context: project?.enabled && pipeline && context.branch
@@ -982,6 +988,8 @@ export default function Workspace() {
                 {aiReply.facts && (
                   <details open>
                     <summary>Observed report summary</summary>
+                    {aiReply.facts.identity && <p>Analyzed run: {aiReply.facts.identity.project_id} · {aiReply.facts.identity.framework} · {aiReply.facts.identity.branch} · commit {aiReply.facts.identity.commit}</p>}
+                    {aiReply.facts.knowledge && <section aria-label="Project knowledge used"><h3>Project knowledge used</h3><p>Operator-maintained sources; document text is not shown here. A new AI request reloads the configured files.</p><ul>{aiReply.facts.knowledge.sources.map(source=><li key={source.id}>{source.document_id} · {source.path} · revision {source.revision} · SHA256 {source.sha256} · reviewed {source.reviewed_at}</li>)}</ul><ul>{aiReply.facts.knowledge.diagnostics.map((item,i)=><li key={i}>{item}</li>)}</ul></section>}
                     {aiReply.facts.analysis_limitations && <>
                       <p>{aiReply.facts.can_analyze_failure_details ? "Available failure details can be analyzed with these limits." : "Analysis uses only available shared report data."}</p>
                       <ul>{aiReply.facts.analysis_limitations.map((limit, i) => <li key={i}>{limit}</li>)}</ul>
@@ -1476,7 +1484,7 @@ export default function Workspace() {
             <button disabled={Boolean(busy)} onClick={()=>updateAnalysisInput({expected_behavior:"",test_code:"",environment_notes:"",share:false})}>Clear analysis context</button>
           </details>}
           {aiEnabled && (
-            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
+            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{setShareKnowledge(e.target.checked);setAiReply(null);setAiError(null);}}/>Include approved project knowledge for the selected run</label><p>Off by default. When enabled, applicable private project documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
               <label>
                 <input
                   type="checkbox"
@@ -1504,7 +1512,7 @@ export default function Workspace() {
           )}
 
         <p className="context-description">
-          A clear target makes a useful check.
+          Execution selection for a new plan. Analysis uses the selected run’s saved project and commit.
         </p>
         <fieldset disabled={!registry || Boolean(busy)}>
           <label>

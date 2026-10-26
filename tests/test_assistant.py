@@ -85,6 +85,8 @@ def test_followup_and_multi_project_clarification(harness):
 
 def evidence(app, monkeypatch):
     monkeypatch.setattr(app.state.monitor, 'get', lambda _: {'pipeline_status': 'successful'})
+    project = app.state.assistant.registry.projects['api'].model_dump()
+    monkeypatch.setattr(app.state.monitor.execution, 'get', lambda _: {'commit':'f'*40,'plan':{'project_id':'api','pipeline_id':'smoke','project':project,'branch':'main','parameters':{'ENV':'uat'}}})
     summary = {'test_status': 'failed', 'analysis_ready': False,
         'artifacts': [{'id': ART, 'availability': 'available', 'parse_status': 'parsed', 'association': 'operator_asserted'}],
         'tests': [{'id': 'test-one', 'name': 'User alice@example.com', 'status': 'fail',
@@ -492,3 +494,27 @@ def test_operator_context_field_limits(harness, field, limit):
     _, client, fake = harness
     assert post(client, run_id=RUN, analysis_context={field:'x'*(limit+1)}).status_code == 422
     assert not fake.calls
+
+
+def test_saved_identity_and_knowledge_consent(tmp_path,harness,monkeypatch):
+    from test_knowledge import provision
+    app, client, fake=harness
+    evidence(app,monkeypatch)
+    project, entry=provision(tmp_path,monkeypatch)
+    fake.result=answer(action='analyze')
+    result=post(client,run_id=RUN,context={'project_id':'web','pipeline_id':'smoke','branch':'main','parameters':{}})
+    assert result.status_code==200
+    assert fake.calls[-1]['selected_run']['identity']['project_id']=='api'
+    assert fake.calls[-1]['selected_run']['identity']['commit']=='f'*40
+    assert fake.calls[-1]['project_knowledge'] is None
+    result=post(client,run_id=RUN,include_project_knowledge=True)
+    assert result.status_code==200
+    source=fake.calls[-1]['project_knowledge']['sources'][0]
+    assert 'private-value' not in source['text']
+    assert source['verification']=='operator_verified'
+    public_source=result.json()['facts']['knowledge']['sources'][0]
+    assert 'text' not in public_source
+    assert public_source['sha256']==source['sha256']
+    before=len(fake.calls)
+    assert post(client,include_project_knowledge=True).status_code==422
+    assert len(fake.calls)==before

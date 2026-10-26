@@ -16,3 +16,6 @@ frontend/out/
 frontend/playwright-report/
 frontend/test-results/
 *.tsbuildinfo
+
+# Private local knowledge files
+/project-context/
