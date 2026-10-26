@@ -344,6 +344,16 @@ class Assistant:
                 for key, bundle in [('knowledge', context.get('project_knowledge')), ('sut_knowledge', context.get('sut_knowledge'))]:
                     facts[key] = {'sources': [{k:v for k,v in source.items() if k != 'text'} for source in bundle['sources']], 'diagnostics': bundle['diagnostics']} if bundle else None
                 context['selected_run'] = redact(facts)
+            if len(json.dumps(context).encode()) > 48_000 and any(bundles):
+                # Knowledge diagnostics remain available locally even when no
+                # optional bundle/provenance fits in the model input.
+                context['project_knowledge'] = None
+                context['sut_knowledge'] = None
+                context['selected_run']['knowledge'] = None
+                context['selected_run']['sut_knowledge'] = None
+                for key in ('knowledge', 'sut_knowledge'):
+                    if facts.get(key) is not None:
+                        facts[key] = {'sources': [], 'diagnostics': ['Knowledge omitted to fit input budget; analysis used report/chat context only.']}
             if len(json.dumps(context).encode()) > 48_000:
                 raise PlanError('ai_context_limit', 'Context exceeds the AI input budget. Reduce the added context, configured catalog or message.', 413)
             try:
