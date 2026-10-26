@@ -40,7 +40,7 @@ class RunMonitor:
             now = time.time()
             for plan_id, raw in rows:
                 plan = json.loads(raw)
-                record = dict(id=plan_id, plan_id=plan_id, project_id=plan['plan']['project_id'],
+                record = dict(id=plan_id, plan_id=plan_id, project_id=plan['plan']['project_id'], sut_id=plan['plan'].get('sut_id'),
                     pipeline=plan['pipeline'], pipeline_status='unknown', test_status='not_collected',
                     remote_state=None, result=None, terminal=False, steps=[], artifacts=[],
                     monitoring_status='active', monitoring_started_at=now, last_checked_at=None,
@@ -60,8 +60,8 @@ class RunMonitor:
     def list(self, limit=50, offset=0):
         self.adopt()
         with self.execution.connect() as db:
-            return [json.loads(row[0]) for row in db.execute(
-                'SELECT record FROM remote_runs ORDER BY rowid DESC LIMIT ? OFFSET ?', (limit, offset))]
+            return [dict(json.loads(row[0]), sut_id=json.loads(row[1])['plan'].get('sut_id') if row[1] else None) for row in db.execute(
+                'SELECT r.record,p.record FROM remote_runs r LEFT JOIN plans p ON p.id=r.id ORDER BY r.rowid DESC LIMIT ? OFFSET ?', (limit, offset))]
 
     def claim_poll(self, run_id, force=False):
         now = time.time()

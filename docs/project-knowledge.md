@@ -75,3 +75,17 @@ No removal date for legacy support is set yet.
 The category loader and plan contract are backend foundations. Independent
 AI sharing, SUT selection UI and AI-authored knowledge proposals are subsequent
 deliveries under issue #32. Existing AI sharing currently loads automation only.
+
+### UI sharing and saved SUT identity
+
+Select an optional **System under test** when the pipeline declares `sut_ids`.
+Preview shows the choice; changing project/pipeline resets it. Run history and
+selected-run information use the saved identity rather than the draft selection.
+Old runs without an identity display `None` and cannot infer one from tags.
+
+Settings contains separate automation and SUT knowledge sharing controls, both
+off by default. Existing project-knowledge preference remains the automation
+preference. Changing either clears displayed AI analyses; settings persist
+independently. General AI sharing consent is still required. Analysis displays
+category/scope, revision/hash, review date and omissions for the sources shared.
+Document text is sent only to the configured model, not returned in provenance.
