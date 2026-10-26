@@ -79,4 +79,4 @@ Build the Next.js frontend and serve it from the Python backend: see [workspace 
 
 ## Optional AI conversation
 
-See [assistant setup, sharing controls and limits](docs/assistant.md). AI proposes configured context and analyzes evidence; execution and cancellation retain explicit UI confirmation. Disabled by default.
+See [assistant setup, sharing controls and limits](docs/assistant.md) and [private project knowledge setup](docs/project-knowledge.md). AI proposes configured context and analyzes evidence; execution and cancellation retain explicit UI confirmation. Disabled by default.

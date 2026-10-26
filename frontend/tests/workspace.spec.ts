@@ -886,3 +886,21 @@ test('additional analysis context is opt-in and isolated between runs', async ({
  await expect(expected).toHaveValue('');
  await expect(page.getByLabel('Include this run’s additional context in AI requests')).not.toBeChecked();
 });
+
+test('project knowledge is opt-in, persisted and shows saved run provenance', async({page})=>{
+ await fixtures(page,true);
+ await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+ const requests:any[]=[];
+ await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'analyze',message:'Reviewed.',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:{pipeline_status:'failed',test_status:'failed',counts:{fail:1},attempts_known:false,identity:{project_id:'api',framework:'robot_api',repository:'example/api',branch:'main',commit:'f'.repeat(40)},knowledge:{sources:[{id:'doc',document_id:'overview',path:'overview.md',revision:'1',sha256:'hash',reviewed_at:'2026-10-26'}],diagnostics:['Some documents omitted.']}},limitations:[]}});});
+ await page.goto('/ui/');
+ await page.locator('.history-item').first().click();
+ await page.getByText('Settings · AI context sharing',{exact:true}).click();
+ const sharing=page.getByLabel('Include approved project knowledge for the selected run');
+ await expect(sharing).not.toBeChecked();await sharing.check();
+ await page.getByRole('textbox',{name:'Structured command'}).fill('analyze');
+ await page.getByRole('button',{name:'Send command'}).click();
+ await expect(page.getByRole('region',{name:'Project knowledge used'})).toContainText('revision 1');
+ expect(requests[0].include_project_knowledge).toBe(true);
+ await page.reload();await page.getByText('Settings · AI context sharing',{exact:true}).click();
+ await expect(sharing).toBeChecked();
+});
