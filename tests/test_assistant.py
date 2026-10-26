@@ -518,3 +518,43 @@ def test_saved_identity_and_knowledge_consent(tmp_path,harness,monkeypatch):
     before=len(fake.calls)
     assert post(client,include_project_knowledge=True).status_code==422
     assert len(fake.calls)==before
+
+
+def test_separate_knowledge_consent_and_missing_sut(harness, monkeypatch, tmp_path):
+    from test_knowledge import provision
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    provision(tmp_path, monkeypatch)
+    fake.result = answer(action='analyze')
+    result = post(client, run_id=RUN, include_project_knowledge=True, include_automation_knowledge=False, include_sut_knowledge=True)
+    assert result.status_code == 200
+    assert fake.calls[-1]['project_knowledge'] is None
+    assert not fake.calls[-1]['sut_knowledge']['sources']
+    assert 'no SUT identity' in result.json()['facts']['sut_knowledge']['diagnostics'][0]
+    assert post(client, include_sut_knowledge=True).status_code == 422
+    assert post(client, include_automation_knowledge=True).status_code == 422
+    result = post(client, run_id=RUN, include_automation_knowledge=True)
+    assert result.status_code == 200
+    assert fake.calls[-1]['project_knowledge']['sources']
+
+
+def test_optional_knowledge_diagnostics_cannot_overflow_base_context(harness, monkeypatch, tmp_path):
+    from test_knowledge import provision
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    provision(tmp_path, monkeypatch)
+    fake.result = answer(action='analyze')
+    history = [{'role': 'user', 'text': 'x' * 4000} for _ in range(8)]
+    assert post(client, run_id=RUN, history=history, message='x'*4000).status_code == 200
+    base = len(json.dumps(fake.calls[-1]).encode())
+    extra = (47950 - base) // 5
+    assert 0 < extra < 4000
+    history[0]['text'] = 'é'*extra + 'x'*(4000-extra)
+    assert post(client, run_id=RUN, history=history, message='x'*4000).status_code == 200
+    result = post(client, run_id=RUN, history=history, message='x'*4000, include_automation_knowledge=True)
+    assert result.status_code == 200
+    assert len(json.dumps(fake.calls[-1]).encode()) <= 48000
+    assert fake.calls[-1]['project_knowledge'] is None
+    assert fake.calls[-1]['selected_run']['knowledge'] is None
+    assert result.json()['facts']['knowledge']['sources'] == []
+    assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
