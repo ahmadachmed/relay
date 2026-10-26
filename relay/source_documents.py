@@ -2,6 +2,8 @@
 import hashlib
 import json
 import os
+import re
+from urllib.parse import unquote
 
 import yaml
 
@@ -29,25 +31,39 @@ def read_local(source, path):
 
 
 def extract_operation(snapshot, method, path, max_bytes=20000):
+    try:
+        return _extract_operation(snapshot, method, path, max_bytes)
+    except (yaml.YAMLError, RecursionError, TypeError, AttributeError, KeyError, OverflowError) as exc:
+        raise ValueError("Invalid API structure") from None
+
+
+def _extract_operation(snapshot, method, path, max_bytes):
     # JSON first avoids YAML implicit scalar conversion for ordinary JSON specs.
     text = snapshot['text']
+    # Bound syntax depth before either parser builds a Python object graph.
+    depth = 0
+    for count, event in enumerate(yaml.parse(text)):
+        if count > 20000 or isinstance(event, yaml.events.AliasEvent):
+            raise ValueError('Source complexity limit exceeded')
+        if isinstance(event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)):
+            depth += 1
+        elif isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
+            depth -= 1
+        if depth > 64:
+            raise ValueError('Source depth limit exceeded')
     try:
         document = json.loads(text)
     except json.JSONDecodeError:
-        depth = 0
-        for count, event in enumerate(yaml.parse(text)):
-            if count > 20000 or isinstance(event, yaml.events.AliasEvent):
-                raise ValueError('YAML complexity limit exceeded')
-            if isinstance(event, (yaml.events.MappingStartEvent, yaml.events.SequenceStartEvent)):
-                depth += 1
-            elif isinstance(event, (yaml.events.MappingEndEvent, yaml.events.SequenceEndEvent)):
-                depth -= 1
-            if depth > 64:
-                raise ValueError('YAML depth limit exceeded')
         document = yaml.safe_load(text)
     if not isinstance(document, dict) or not (document.get('swagger') == '2.0' or str(document.get('openapi', '')).startswith(('3.0.', '3.1.'))):
         raise ValueError('Unsupported API specification')
-    item = document.get('paths', {}).get(path)
+    paths = document.get('paths', {})
+    if not isinstance(paths, dict):
+        raise ValueError('Invalid API paths')
+    components = document.get('components', {})
+    if not isinstance(components, dict):
+        raise ValueError('Invalid API components')
+    item = paths.get(path)
     if isinstance(item, dict) and '$ref' in item:
         raise ValueError('Referenced path items are unsupported')
     operation = item.get(method.lower()) if isinstance(item, dict) else None
@@ -55,10 +71,17 @@ def extract_operation(snapshot, method, path, max_bytes=20000):
         raise ValueError('Operation unavailable')
     result = {'operation': operation, 'path_parameters': item.get('parameters', []),
               'security': operation.get('security', document.get('security', [])), 'references': {}}
-    pending = [result['operation'], result['path_parameters'], result['security']]
+    if document.get('swagger') == '2.0':
+        result['transport'] = {key: document[key] for key in ('host', 'basePath', 'schemes') if key in document}
+        for key in ('consumes', 'produces', 'schemes'):
+            if key in operation or key in document:
+                result[key] = operation.get(key, document.get(key))
+    else:
+        result['servers'] = operation.get('servers', item.get('servers', document.get('servers', [{'url': '/'}])))
+    pending = [result.get('servers', []), result['operation'], result['path_parameters'], result['security']]
     # Include declared security scheme definitions when authentication applies.
     if result['security']:
-        result['security_definitions'] = document.get('securityDefinitions', document.get('components', {}).get('securitySchemes', {}))
+        result['security_definitions'] = document.get('securityDefinitions', components.get('securitySchemes', {}))
         pending.append(result['security_definitions'])
     nodes = 0
     while pending:
@@ -74,9 +97,18 @@ def extract_operation(snapshot, method, path, max_bytes=20000):
                 if ref not in result['references']:
                     target = document
                     try:
-                        for part in ref[2:].split('/'):
+                        if re.search(r'%(?![0-9A-Fa-f]{2})', ref):
+                            raise ValueError('Invalid reference encoding')
+                        for part in unquote(ref[2:], errors='strict').split('/'):
+                            if re.search(r'~(?![01])', part):
+                                raise ValueError('Invalid pointer escape')
                             part = part.replace('~1', '/').replace('~0', '~')
-                            target = target[int(part)] if isinstance(target, list) else target[part]
+                            if isinstance(target, list):
+                                if not re.fullmatch(r'0|[1-9][0-9]*', part):
+                                    raise ValueError('Invalid array index')
+                                target = target[int(part)]
+                            else:
+                                target = target[part]
                     except (KeyError, TypeError, ValueError, IndexError):
                         raise ValueError('Unresolved API reference') from None
                     result['references'][ref] = target
