@@ -47,3 +47,31 @@ code points in the redacted text, not bytes or positions in the original. Suite-
 unread records remain absent. Model-chosen retrieval, task-scoped resumable approval,
 semantic verification of citations, automatic full-report retrieval, and other attachment
 formats are future #45 work. This feature does not complete M1.
+
+## Automatic failure discovery (bounded)
+
+Select one uploaded Robot XML report and check “Let AI search this report” for
+the next message. The configured model (including a local gateway's upstream)
+receives a redacted page of failure names and may request another failure page or
+sections of a previously listed failed test. The consent applies to this request,
+not later messages. Use the returned citations and shared section display to inspect
+what was actually sent from the latest test detail page. Earlier detail pages are
+not retained or citable in the response; the trace records only their IDs and counts.
+An uploaded report is not proof that a saved pipeline ran it.
+
+A maximum of four model rounds, 20 failures or test sections per page, a cumulative
+model-input budget and the existing request deadline bound work. Report coverage is
+partial: the UI counts distinct failure names listed to the model, not tests fully
+investigated. When bounds prevent an answer, Relay reports an error and asks for a
+narrower request. Long records still require manual continuation. A model can select
+only failures previously listed in the same request, not arbitrary paths, files or
+other conversations. Every read checks the attachment scope and hash. The answer is
+not a verified root cause, and citation membership does not establish correctness.
+Redaction is best effort; inspect sensitive data before sharing.
+
+This first slice cannot combine automatic report retrieval with original-source
+retrieval or manual report selection in the same request. Disable source sharing
+before using it. The model uses structured report operations through the existing
+provider output; there is no background investigation job, task-resume approval,
+report-wide text search, suite setup/teardown retrieval or automatic full-report
+coverage. Those remain follow-up work under #45.
