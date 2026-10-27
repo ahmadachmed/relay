@@ -640,3 +640,50 @@ def test_report_unicode_fits_budget_and_citations_only_cover_included_sections(h
     next_page = post(client, report_attachment={**ref, 'offset':shared['next_offset']})
     assert next_page.status_code == 200
     assert next_page.json()['report_shared']['items'][0]['section_id'] == str(shared['next_offset'])
+
+
+def test_report_long_section_continuation_is_redacted_bounded_and_scoped(harness, monkeypatch):
+    app, client, fake = harness
+    secret = 'secretvalue987654321'
+    monkeypatch.setenv('RELAY_TEST_SECRET', secret)
+    scope = client.post('/api/conversations').json()['id']
+    other = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    original = 'A'*1995 + secret + '漢'*2500 + 'TAIL'
+    item = client.post(path, params={'filename':'output.xml'}, content=('<robot><suite><test name="x"><msg>' + original + '</msg><status status="FAIL"/></test></suite></robot>').encode()).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    first = post(client, report_attachment=ref).json()['report_shared']['items'][0]
+    assert first['section_id'] == '0' and first['next_text_offset'] == 2000
+    assert secret not in first['text']
+    second_ref = {**ref, 'section_id':'0', 'text_offset':first['next_text_offset'], 'text_sha256':first['text_sha256']}
+    second = post(client, report_attachment=second_ref)
+    assert second.status_code == 200
+    chunk = second.json()['report_shared']['items'][0]
+    assert chunk['text_offset'] == 2000 and chunk['text_sha256'] == first['text_sha256']
+    assert secret not in json.dumps(fake.calls[-1])
+    third = post(client, report_attachment={**second_ref, 'text_offset':chunk['next_text_offset']}).json()['report_shared']['items'][0]
+    assert third['text'].endswith('TAIL') and third['next_text_offset'] is None
+    assert post(client, report_attachment={**second_ref, 'text_sha256':'0'*64}).status_code == 409
+    assert post(client, report_attachment={**second_ref, 'conversation_id':other}).status_code == 404
+    assert post(client, report_attachment={**second_ref, 'section_id':'999'}).status_code == 404
+    assert post(client, report_attachment={**second_ref, 'text_offset':9000}).status_code == 422
+    assert post(client, report_attachment={k:v for k,v in second_ref.items() if k != 'text_sha256'}).status_code == 422
+    monkeypatch.setenv('RELAY_ANOTHER_SECRET', '漢'*12)
+    assert post(client, report_attachment=second_ref).status_code == 409
+
+
+def test_continuation_is_discarded_if_redaction_changes_during_model_call(harness, monkeypatch):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    text = 'x'*2100 + 'example-secret-string' + 'y'*50
+    item = client.post(path, params={'filename':'output.xml'}, content=('<robot><suite><test name="x"><msg>' + text + '</msg><status status="FAIL"/></test></suite></robot>').encode()).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'test_id':'0','share':True}
+    first = post(client, report_attachment=ref).json()['report_shared']['items'][0]
+    class ChangeRedaction:
+        async def answer(self, context):
+            monkeypatch.setenv('RELAY_NEW_SECRET', 'example-secret-string')
+            return answer(action='answer')
+    app.state.assistant.provider = ChangeRedaction()
+    continuation = {**ref,'section_id':'0','text_offset':first['next_text_offset'],'text_sha256':first['text_sha256']}
+    assert post(client, report_attachment=continuation).status_code == 409

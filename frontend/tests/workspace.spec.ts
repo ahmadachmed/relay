@@ -1181,7 +1181,7 @@ test('a selected report is shared only with approval for one AI request', async 
   const requests:any[]=[];
   await page.route('**/api/assistant/chat',r=>{
     requests.push(r.request().postDataJSON());
-    return r.fulfill({json:{answer:{action:'answer',message:'Inspect the failure.',selection:null,hypotheses:[],bug_report_draft:null,report_citations:requests.at(-1).report_attachment ? [{section_id:'0',claim:'Timeout was reported.'}] : []},run_id:null,facts:null,limitations:[],report_shared:requests.at(-1).report_attachment ? {attachment_id:attachment,sha256:hash,test_id:'24',test:{id:'24',name:'Failed login',status:'FAIL'},offset:0,total:1,next_offset:null,items:[{section_id:'0',kind:'msg',name:'',text:'Timeout',truncated:false}]} : null}});
+    return r.fulfill({json:{answer:{action:'answer',message:'Inspect the failure.',selection:null,hypotheses:[],bug_report_draft:null,report_citations:requests.at(-1).report_attachment ? [{section_id:'0',claim:'Timeout was reported.'}] : []},run_id:null,facts:null,limitations:[],report_shared:requests.at(-1).report_attachment ? {attachment_id:attachment,sha256:hash,test_id:'24',test:{id:'24',name:'Failed login',status:'FAIL'},offset:0,total:1,next_offset:null,items:[{section_id:'0',kind:'msg',name:'',text:requests.length === 1 ? 'Timeout' : 'More detail',truncated:requests.length === 1,text_offset:requests.length === 1 ? 0 : 7,next_text_offset:requests.length === 1 ? 7 : null,text_sha256:'a'.repeat(64)}]} : null}});
   });
   await page.goto('/ui/');
   await page.getByLabel('Robot report').selectOption(attachment);
@@ -1194,10 +1194,18 @@ test('a selected report is shared only with approval for one AI request', async 
   await expect(page.getByLabel('Report details shared with AI')).toContainText('Timeout');
   await expect(page.getByLabel('Report citations').getByRole('link',{name:'Section 0'})).toHaveAttribute('href','#report-section-0');
   await expect(page.getByRole('checkbox',{name:/Share up to 20 sections/})).not.toBeChecked();
-  await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
+  await page.getByRole('button',{name:'Use next part of section 0'}).click();
+  await expect(page.getByRole('checkbox',{name:/Share up to 20 sections/})).not.toBeChecked();
+  await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Continue analysis');
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(2);
-  expect(requests[1].report_attachment).toBeNull();
+  expect(requests[1].report_attachment).toMatchObject({section_id:'0',text_offset:7,text_sha256:'a'.repeat(64),share:true});
+  await expect(page.getByLabel('Report details shared with AI')).toContainText('More detail');
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(3);
+  expect(requests[2].report_attachment).toBeNull();
 });
 
 for (const removeSelected of [true, false]) test(`removing ${removeSelected ? 'the selected' : 'an unrelated'} report updates the next AI request`, async ({page}) => {

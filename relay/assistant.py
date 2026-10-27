@@ -50,6 +50,17 @@ class ReportAttachment(Strict):
     test_id: str = Field(pattern=r'^(0|[1-9][0-9]{0,9})$')
     offset: int = Field(default=0, ge=0, le=100000)
     share: Literal[True]
+    section_id: str | None = Field(default=None, pattern=r'^(0|[1-9][0-9]{0,9})$')
+    text_offset: int = Field(default=0, ge=0, le=10000000)
+    text_sha256: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+
+    @model_validator(mode='after')
+    def validate_chunk(self):
+        if self.section_id is None and (self.text_offset or self.text_sha256 is not None):
+            raise ValueError('A section ID is required for a text chunk')
+        if self.text_offset and self.text_sha256 is None:
+            raise ValueError('Continuation requires the redacted section hash')
+        return self
 
 
 class ChatRequest(Strict):
@@ -429,9 +440,11 @@ class Assistant:
             if request.report_attachment:
                 ref = request.report_attachment
                 report = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id,
-                                                 ref.offset, 20, ref.test_id, redact)
+                                                 ref.offset, 20, ref.test_id, redact, ref.section_id, ref.text_offset)
                 if report['sha256'] != ref.sha256:
                     raise PlanError('attachment_changed', 'The selected attachment changed. Select it again.', 409)
+                if ref.text_sha256 is not None and report['items'][0]['text_sha256'] != ref.text_sha256:
+                    raise PlanError('report_section_changed', 'Redacted section changed; start again from the first chunk.', 409)
                 # Redact free text, preserving opaque IDs and the original hash for provenance.
                 report_shared = {**report, 'test_id': ref.test_id}
                 context['report_attachment'] = report_shared
@@ -512,7 +525,10 @@ class Assistant:
                         if request.report_attachment:
                             ref = request.report_attachment
                             fresh = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id,
-                                                            ref.offset, 20, ref.test_id)
+                                                            ref.offset, 20, ref.test_id, redact if ref.section_id is not None else None,
+                                                            ref.section_id, ref.text_offset)
+                            if ref.section_id is not None and fresh['items'][0]['text_sha256'] != report_shared['items'][0]['text_sha256']:
+                                raise PlanError('report_section_changed', 'Redacted section changed; start again from the first chunk.', 409)
                             if fresh['sha256'] != ref.sha256:
                                 raise PlanError('attachment_changed', 'The selected attachment changed. Select it again.', 409)
                         size = model_input_size(context)
@@ -562,7 +578,10 @@ class Assistant:
             if request.report_attachment:
                 ref = request.report_attachment
                 fresh = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id,
-                                                ref.offset, 20, ref.test_id)
+                                                ref.offset, 20, ref.test_id, redact if ref.section_id is not None else None,
+                                                ref.section_id, ref.text_offset)
+                if ref.section_id is not None and fresh['items'][0]['text_sha256'] != report_shared['items'][0]['text_sha256']:
+                    raise PlanError('report_section_changed', 'Redacted section changed; start again from the first chunk.', 409)
                 if fresh['sha256'] != ref.sha256:
                     raise PlanError('attachment_changed', 'The selected attachment changed. Select it again.', 409)
             shared_report_ids = {item['section_id'] for item in report_shared['items']} if report_shared else set()
