@@ -58,6 +58,7 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
     if test_id is not None:
         if not any(t['id'] == test_id for t in tests):
             raise PlanError('not_found', 'Test not found in this report.', 404)
+        base['test'] = next(t for t in tests if t['id'] == test_id)
         items = selected
     else:
         items = [t for t in tests if t['status'] == 'FAIL']

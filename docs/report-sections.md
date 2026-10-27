@@ -22,3 +22,25 @@ Deletion/expiry removes access. No derived content is persisted.
 Remaining #45 work includes suite-level evidence, structured hierarchy/search,
 shared saved-run retrieval, document extraction, AI tools/citations, task approval
 continuation and frontend inspection. This slice does not complete #45 or M1.
+
+## Share one test with AI (initial slice)
+
+In the conversation, select an uploaded XML report, choose a failed test, optionally
+set the starting section, and explicitly check the sharing checkbox. The next AI
+message sends up to 20 redacted section records and test metadata to the configured
+model provider (which can be upstream of a local gateway). Consent is per request;
+a retry requires selecting and approving sharing again. A scope-bound attachment ID,
+original SHA-256, test ID, and offset are checked on the backend before each model
+round. Deletion, expiry, wrong conversation and changed hashes reject the request.
+The attachment remains a user-provided reference; it is not automatically bound to
+any pipeline or evidence slot. Full files are not sent. Redaction is best effort.
+
+The response displays the redacted records provided to the model and coverage so
+users can inspect the basis of the answer. Report citations are accepted only for section IDs shared with the model in that
+request; membership does not validate the meaning of a claim. Existing saved-run classification and its
+citations still require saved-run evidence; report attachments alone do not enable
+that flow. Long records remain truncated at 2,000 characters; use section offset to
+move through records, not within a long record. Suite-level setup/teardown and
+unread records remain absent. Model-chosen retrieval, task-scoped resumable approval,
+semantic verification of citations, full long-message retrieval, and other attachment
+formats are future #45 work. This feature does not complete M1.

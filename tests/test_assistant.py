@@ -558,3 +558,49 @@ def test_optional_knowledge_diagnostics_cannot_overflow_base_context(harness, mo
     assert fake.calls[-1]['selected_run']['knowledge'] is None
     assert result.json()['facts']['knowledge']['sources'] == []
     assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+
+
+def test_attachment_is_only_shared_with_explicit_scoped_reference(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    other = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="Test"><kw name="Call"><msg level="FAIL">password=secret123</msg><status status="FAIL"/></kw><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'offset':0, 'share':True}
+    assert post(client).status_code == 200
+    assert 'report_attachment' not in fake.calls[-1]
+    assert post(client, report_attachment={**ref, 'share':False}).status_code == 422
+    assert post(client, report_attachment={**ref, 'conversation_id':other}).status_code == 404
+    assert post(client, report_attachment={**ref, 'sha256':'0'*64}).status_code == 409
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    sent = fake.calls[-1]['report_attachment']
+    assert sent['sha256'] == item['sha256'] and sent['test_id'] == '0'
+    assert 'secret123' not in json.dumps(sent)
+    assert sent == result.json()['report_shared']
+    section_id = sent['items'][0]['section_id']
+    fake.result = answer(action='answer', report_citations=[{'section_id':section_id, 'claim':'A shared section.'}])
+    assert post(client, report_attachment=ref).status_code == 200
+    fake.result = answer(action='answer', report_citations=[{'section_id':'999', 'claim':'Never shared.'}])
+    assert post(client, report_attachment=ref).status_code == 502
+    assert post(client).status_code == 502
+    fake.result = answer()
+    assert post(client, report_attachment={**ref, 'test_id':'999'}).status_code == 404
+    client.delete(path + '/' + item['id'])
+    assert post(client, report_attachment=ref).status_code == 404
+
+
+def test_deleted_attachment_during_model_call_discards_response(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    item = client.post(path, params={'filename':'output.xml'}, content=b'<robot><suite><test name="x"><status status="FAIL"/></test></suite></robot>').json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    class DeleteDuringCall:
+        async def answer(self, context):
+            app.state.assistant.conversation_files.delete(scope, item['id'])
+            return answer(action='answer')
+    app.state.assistant.provider = DeleteDuringCall()
+    response = post(client, report_attachment=ref)
+    assert response.status_code == 404

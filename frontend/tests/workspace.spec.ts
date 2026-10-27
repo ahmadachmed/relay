@@ -1170,3 +1170,32 @@ for (const width of [390, 1440]) test(`thinking stays above composer with long h
   release();
   await expect(thinking).toHaveCount(0);
 });
+
+test('a selected report is shared only with approval for one AI request', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), hash='e'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{id:'24',name:'Failed login',status:'FAIL'}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{
+    requests.push(r.request().postDataJSON());
+    return r.fulfill({json:{answer:{action:'answer',message:'Inspect the failure.',selection:null,hypotheses:[],bug_report_draft:null,report_citations:requests.at(-1).report_attachment ? [{section_id:'0',claim:'Timeout was reported.'}] : []},run_id:null,facts:null,limitations:[],report_shared:requests.at(-1).report_attachment ? {attachment_id:attachment,sha256:hash,test_id:'24',test:{id:'24',name:'Failed login',status:'FAIL'},offset:0,total:1,next_offset:null,items:[{section_id:'0',kind:'msg',name:'',text:'Timeout',truncated:false}]} : null}});
+  });
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByRole('combobox',{name:'Failure',exact:true}).selectOption('24');
+  await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate this failure');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].report_attachment).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,test_id:'24',offset:0,share:true});
+  await expect(page.getByLabel('Report details shared with AI')).toContainText('Timeout');
+  await expect(page.getByLabel('Report citations').getByRole('link',{name:'Section 0'})).toHaveAttribute('href','#report-section-0');
+  await expect(page.getByRole('checkbox',{name:/Share up to 20 sections/})).not.toBeChecked();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(2);
+  expect(requests[1].report_attachment).toBeNull();
+});
