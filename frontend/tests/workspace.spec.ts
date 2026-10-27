@@ -1199,3 +1199,40 @@ test('a selected report is shared only with approval for one AI request', async 
   await expect.poll(()=>requests.length).toBe(2);
   expect(requests[1].report_attachment).toBeNull();
 });
+
+for (const removeSelected of [true, false]) test(`removing ${removeSelected ? 'the selected' : 'an unrelated'} report updates the next AI request`, async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), other='f'.repeat(32), hash='e'.repeat(64);
+  const removed = removeSelected ? attachment : other;
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[
+    {id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'},
+    ...(!removeSelected ? [{id:other,filename:'other.xml',sha256:hash,size:123,status:'stored_format_unverified'}] : []),
+  ]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{id:'24',name:'Failed login',status:'FAIL'}]}}));
+  await page.route(`**/api/conversations/${scope}/attachments/${removed}`,r=>r.fulfill({json:{deleted:true}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{
+    requests.push(r.request().postDataJSON());
+    return r.fulfill({json:{answer:{action:'answer',message:'Ready.',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]}});
+  });
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByRole('combobox',{name:'Failure',exact:true}).selectOption('24');
+  await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
+  const removeButton = page.getByRole('button',{name:`Remove ${removeSelected ? 'output.xml' : 'other.xml'}`,exact:true});
+  await removeButton.click();
+  await expect(removeButton).toHaveCount(0);
+  if (removeSelected) {
+    await expect(page.getByLabel('Report context for next AI message')).toHaveCount(0);
+  } else {
+    await expect(page.getByLabel('Robot report')).toHaveValue(attachment);
+    await expect(page.getByRole('checkbox',{name:/Share up to 20 sections/})).toBeChecked();
+  }
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Continue investigating');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].report_attachment).toEqual(removeSelected ? null : {conversation_id:scope,attachment_id:attachment,sha256:hash,test_id:'24',offset:0,share:true});
+  await expect(page.getByRole('region',{name:'AI suggestion',exact:true})).toBeVisible();
+});

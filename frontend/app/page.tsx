@@ -243,7 +243,7 @@ export default function Workspace() {
     } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
     finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
-  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));}catch(e){setAttachmentError(errorText(e));}}
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
