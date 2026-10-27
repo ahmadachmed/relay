@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   LoaderCircle,
   PanelRight,
+  Paperclip,
   Play,
   Plus,
   RefreshCw,
@@ -187,6 +188,18 @@ export default function Workspace() {
   const [conversations, setConversations] = useState<Record<string, Message[]>>({});
   const conversationKey = selected || "planning";
   const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
+  type ConversationFile = {id:string;filename:string;size:number;status:string};
+  const [attachments,setAttachments]=useState<ConversationFile[]>([]);
+  const [attachmentError,setAttachmentError]=useState("");
+  const [attachmentBusy,setAttachmentBusy]=useState(false);
+  const attachmentInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{let live=true;void api<ConversationFile[]>(`/api/conversations/${conversationKey}/attachments`).then(v=>{if(live)setAttachments(v);}).catch(e=>{if(live)setAttachmentError(errorText(e));});return()=>{live=false;};},[conversationKey]);
+  async function attachFiles(files:FileList|null){
+    if(!files?.length)return;setAttachmentBusy(true);setAttachmentError("");
+    try{for(const file of Array.from(files)){const item=await api<ConversationFile>(`/api/conversations/${conversationKey}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});setAttachments(old=>old.some(x=>x.id===item.id)?old:[...old,item]);}}
+    catch(e){setAttachmentError(errorText(e));}finally{setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
+  }
+  async function removeAttachment(id:string){try{await api(`/api/conversations/${conversationKey}/attachments/${id}`,{method:"DELETE"});setAttachments(old=>old.filter(x=>x.id!==id));}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -1508,14 +1521,20 @@ export default function Workspace() {
         <div className="composer-wrap">
 
           <form className="composer" onSubmit={sendCommand}>
+            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError}</span>}</div>
+            <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(e.target.files)}/>
+            <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">
               Structured command
             </label>
-            <input
+            <textarea
               id="command"
+              rows={1}
               value={command}
+              onInput={e=>{const el=e.currentTarget;el.style.height="auto";el.style.height=`${Math.min(el.scrollHeight,160)}px`;}}
+              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit();}}}
               onChange={(e) => setCommand(e.target.value)}
-              maxLength={500}
+              maxLength={4000}
               placeholder={
                 aiEnabled && shareAi
                   ? "Ask about your tests or suggest a check…"
