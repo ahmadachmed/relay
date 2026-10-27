@@ -1274,3 +1274,36 @@ for (const width of [390, 1440]) test(`automatic report search needs explicit on
   await expect.poll(()=>requests.length).toBe(2);
   expect(requests[1].auto_report).toBeNull();
 });
+
+for (const width of [390, 1440]) test(`optional reference and report are shared only with independent approval at ${width}px`, async ({page}) => {
+  await page.setViewportSize({width,height:width===390 ? 700 : 900});
+  await fixtures(page);
+  const scope='c'.repeat(32), report='d'.repeat(32), doc='f'.repeat(32), hash='e'.repeat(64), docHash='a'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:report,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'},{id:doc,filename:'trd.pdf',sha256:docHash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${report}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{id:'0',name:'login',status:'FAIL'}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{
+    requests.push(r.request().postDataJSON());
+    return r.fulfill({json:{answer:{action:'answer',message:'Review.',selection:null,hypotheses:[],bug_report_draft:null,reference_citations:requests.at(-1).reference_attachment ? [{section_id:'0',claim:'Expected behavior'}] : []},run_id:null,facts:null,limitations:[],reference_shared:requests.at(-1).reference_attachment ? {attachment_id:doc,sha256:docHash,format:'pdf',total_sections:2,omitted_sections:1,sections:[{id:'0',location:'page 1',text:'Expected 200',truncated:false}]} : null}});
+  });
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(report);
+  await page.getByLabel('Reference document').selectOption(doc);
+  await page.getByRole('checkbox',{name:/Let AI search this report/}).check();
+  await page.getByRole('checkbox',{name:/Share up to three relevant sections/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Compare failure to expected behavior');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].reference_attachment).toEqual({conversation_id:scope,attachment_id:doc,sha256:docHash,share:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:report,sha256:hash,share:true});
+  await expect(page.getByLabel('Reference details shared with AI')).toContainText('Expected 200');
+  await expect(page.getByLabel('Reference details shared with AI').getByRole('link',{name:'Reference 0'})).toHaveAttribute('href','#reference-section-0');
+  await expect(page.getByRole('checkbox',{name:/Share up to three relevant sections/})).not.toBeChecked();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(2);
+  expect(requests[1].reference_attachment).toBeNull();
+  expect(requests[1].auto_report).toBeNull();
+});
