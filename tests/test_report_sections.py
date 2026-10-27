@@ -52,3 +52,16 @@ def test_unknown_xml_encoding_returns_422(tmp_path):
     upload = client.post(path, params={'filename': 'output.xml'}, content=b'<?xml version="1.0" encoding="made-up"?><robot/>')
     assert upload.status_code == 200
     assert client.get(path + '/' + upload.json()['id'] + '/robot-report').status_code == 422
+
+
+@pytest.mark.parametrize('encoding', ['utf-7', 'shift_jis', 'utf-32'])
+def test_unsupported_xml_encoding_returns_422(tmp_path, encoding):
+    client = TestClient(create_app(data=tmp_path, monitoring=False))
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = f'<?xml version="1.0" encoding="{encoding}"?><robot/>'.encode()
+    upload = client.post(path, params={'filename': 'output.xml'}, content=body)
+    assert upload.status_code == 200
+    response = client.get(path + '/' + upload.json()['id'] + '/robot-report')
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'invalid_report'

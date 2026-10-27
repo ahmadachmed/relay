@@ -50,7 +50,7 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
                         current = None
                 element.clear()
                 stack.pop()
-    except (ParseError, DefusedXmlException, LookupError):
+    except (ParseError, DefusedXmlException, LookupError, ValueError):
         raise PlanError('invalid_report', 'Malformed or unsafe XML report.', 422) from None
     base = {'sha256': sha, 'total_tests': len(tests), 'scope': 'operator_uploaded',
             'limitations': ['Local inspection only; not shared with AI.',
