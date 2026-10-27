@@ -1185,8 +1185,8 @@ test('a selected report is shared only with approval for one AI request', async 
   });
   await page.goto('/ui/');
   await page.getByLabel('Robot report').selectOption(attachment);
-  await expect(page.getByRole('combobox',{name:'Failure',exact:true}).getByRole('option',{name:'Root / Checkout / Failed login (test 24)'})).toHaveCount(1);
-  await page.getByRole('combobox',{name:'Failure',exact:true}).selectOption('24');
+  await expect(page.getByRole('combobox',{name:'Report test',exact:true}).getByRole('option',{name:'Root / Checkout / Failed login (test 24)'})).toHaveCount(1);
+  await page.getByRole('combobox',{name:'Report test',exact:true}).selectOption('24');
   await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
   await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate this failure');
   await page.getByRole('button',{name:'Send command'}).click();
@@ -1229,7 +1229,7 @@ for (const removeSelected of [true, false]) test(`removing ${removeSelected ? 't
   });
   await page.goto('/ui/');
   await page.getByLabel('Robot report').selectOption(attachment);
-  await page.getByRole('combobox',{name:'Failure',exact:true}).selectOption('24');
+  await page.getByRole('combobox',{name:'Report test',exact:true}).selectOption('24');
   await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
   const removeButton = page.getByRole('button',{name:`Remove ${removeSelected ? 'output.xml' : 'other.xml'}`,exact:true});
   await removeButton.click();
@@ -1266,7 +1266,7 @@ for (const width of [390, 1440]) test(`automatic report search needs explicit on
   await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate failures');
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(1);
-  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true,search_all:true,include_suites:true});
   expect(requests[0].report_attachment).toBeNull();
   await expect(page.getByLabel('Automatic report search')).toContainText('Some failures were not listed');
   await expect(page.getByLabel('Automatic report search')).toContainText('Optional knowledge omitted');
@@ -1299,7 +1299,7 @@ for (const width of [390, 1440]) test(`optional reference and report are shared 
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(1);
   expect(requests[0].reference_attachment).toEqual({conversation_id:scope,attachment_id:doc,sha256:docHash,share:true});
-  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:report,sha256:hash,share:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:report,sha256:hash,share:true,search_all:true,include_suites:true});
   await expect(page.getByLabel('Reference details shared with AI')).toContainText('Expected 200');
   await expect(page.getByLabel('Reference details shared with AI').getByRole('link',{name:'Reference 0'})).toHaveAttribute('href','#reference-section-0');
   await expect(page.getByRole('checkbox',{name:/Share up to three relevant sections/})).not.toBeChecked();
@@ -1308,4 +1308,69 @@ for (const width of [390, 1440]) test(`optional reference and report are shared 
   await expect.poll(()=>requests.length).toBe(2);
   expect(requests[1].reference_attachment).toBeNull();
   expect(requests[1].auto_report).toBeNull();
+});
+
+test('report search finds a passing test and selects its section only after approval', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), hash='e'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{id:'1',name:'Failed',status:'FAIL'}]}}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report/search`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{test_id:'0',test_name:'Passing',suite_id:null,suite_path:'Root',scope:null,kind:'msg',section_id:'2',name:'',text:'Timeout',text_offset:0,text_truncated:false}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'answer',message:'Done',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]}});});
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByLabel('Search report',{exact:true}).fill('timeout');
+  await page.getByRole('button',{name:'Search locally'}).click();
+  await page.getByRole('button',{name:/Root \/ Passing/}).click();
+  await expect(page.getByRole('combobox',{name:'Report test',exact:true})).toHaveValue('0');
+  await expect(page.getByLabel('Starting section')).toHaveValue('2');
+  await expect(page.getByRole('checkbox',{name:/Share up to 20 sections/})).not.toBeChecked();
+  await page.getByRole('checkbox',{name:/Share up to 20 sections/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Inspect this');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].report_attachment).toMatchObject({test_id:'0',offset:2,share:true});
+});
+
+test('suite setup search opens local detail without sharing it', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), hash='e'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:0,offset:0,next_offset:null,items:[]}}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report/search`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{test_id:null,test_name:null,suite_id:'0',suite_path:'Root',scope:'SETUP',kind:'msg',section_id:'0',name:'',text:'database unavailable',text_offset:0,text_truncated:false}]}}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report/suites?*`,r=>r.fulfill({json:{sha256:hash,suite:{id:'0',suite_path:'Root',status:'FAIL',status_message:'setup failed',suite_path_truncated:false,status_message_truncated:false},offset:0,total:1,next_offset:null,items:[{section_id:'0',scope:'SETUP',kind:'msg',name:'',text:'database unavailable',truncated:false}]}}));
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByLabel('Search report',{exact:true}).fill('database');
+  await page.getByRole('button',{name:'Search locally'}).click();
+  await page.getByRole('button',{name:/Root · SETUP/}).click();
+  await expect(page.getByLabel('Local suite details')).toContainText('database unavailable');
+  await expect(page.getByLabel('Local suite details')).toContainText('not shared with AI');
+  await expect(page.getByRole('checkbox',{name:/Let AI search this report/})).not.toBeChecked();
+});
+
+test('comparison shares only the selected local page with explicit one-request approval', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), first='d'.repeat(32), second='f'.repeat(32), hash1='e'.repeat(64), hash2='a'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:first,filename:'before.xml',sha256:hash1,size:123,status:'stored_format_unverified'},{id:second,filename:'after.xml',sha256:hash2,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/robot-reports/compare`,r=>r.fulfill({json:{first_sha256:hash1,second_sha256:hash2,total:1,offset:0,next_offset:null,counts:{fail_to_pass:1},ambiguous_first_tests:0,limitations:['Fail-to-pass is not proof of flakiness.'],items:[{pair_id:'0',first_test_id:'0',second_test_id:'0',suite_path:'Root',suite_path_truncated:false,test_name:'login',test_name_truncated:false,first_status:'FAIL',second_status:'PASS',transition:'fail_to_pass'}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'answer',message:'Observed difference',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]}});});
+  await page.goto('/ui/');
+  await page.getByLabel('Earlier report').selectOption(first);
+  await page.getByLabel('Later report').selectOption(second);
+  await page.getByRole('button',{name:'Compare locally'}).click();
+  await expect(page.getByText(/Fail-to-pass is not proof of flakiness/)).toBeVisible();
+  await page.getByRole('checkbox',{name:/Share the selected page/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Compare these results');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].comparison).toEqual({conversation_id:scope,first_id:first,first_sha256:hash1,second_id:second,second_sha256:hash2,offset:0,share:true});
+  await expect(page.getByRole('checkbox',{name:/Share the selected page/})).not.toBeChecked();
 });

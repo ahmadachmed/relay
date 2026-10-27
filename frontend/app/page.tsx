@@ -49,10 +49,13 @@ type Context = {
 };
 type ReportPage = {sha256:string;total:number;offset:number;next_offset:number|null;items:{id:string;name:string;status:string;suite_path?:string;suite_path_truncated?:boolean}[]};
 type SharedReport = {attachment_id:string;sha256:string;test_id:string;test:{id:string;name:string;status:string;suite_path?:string;suite_path_truncated?:boolean};offset:number;total:number;next_offset:number|null;items:{section_id:string;kind:string;text:string;name:string;truncated:boolean;status?:string|null;text_offset:number;next_text_offset:number|null;text_sha256:string}[]};
+type ComparisonShared = {first_sha256:string;second_sha256:string;total:number;offset:number;next_offset:number|null;counts:Record<string,number>;ambiguous_first_tests:number;limitations:string[];items:{pair_id:string;first_test_id:string;second_test_id:string;suite_path:string;suite_path_truncated:boolean;test_name:string;test_name_truncated:boolean;first_status:string;second_status:string;transition:string}[]};
 type ReferenceShared = {attachment_id:string;sha256:string;format:string;total_sections:number;omitted_sections:number;non_text_pages?:number[];sections:{id:string;location:string;text:string;truncated:boolean;text_offset?:number}[]};
 type AiReply = {
+  comparison_shared?: ComparisonShared | null;
+  suite_shared?: {suite_id:string;sha256:string;suite:{suite_path:string;suite_path_truncated:boolean;status:string;status_message:string;status_message_truncated:boolean};items:{section_id:string;scope:string;kind:string;name:string;text:string;truncated:boolean}[];total:number;offset:number;next_offset:number|null} | null;
   reference_shared?: ReferenceShared | null;
-  auto_report?: {total_tests:number;total_failures:number;listed_failures:number;tests_with_sections_shared:number;offset:number;next_offset:number|null;coverage:string;budget_diagnostics?:string[];trace:{operation:string;offset:number;count:number;test_id:string|null}[]} | null;
+  auto_report?: {total_tests:number;total_failures:number;listed_failures:number;tests_with_sections_shared:number;offset:number;next_offset:number|null;coverage:string;budget_diagnostics?:string[];trace:{operation:string;offset:number;count:number;test_id:string|null;suite_id?:string|null}[]} | null;
   report_shared?: SharedReport | null;
   source_manifest?: SourceManifest | null;
   planning_knowledge?: {automation:Knowledge|null;sut:Knowledge|null} | null;
@@ -61,6 +64,8 @@ type AiReply = {
     source_citations?: {handle:string;claim:string}[];
     report_citations?: {section_id:string;claim:string}[];
     reference_citations?: {section_id:string;claim:string}[];
+    suite_citations?: {section_id:string;claim:string}[];
+    comparison_citations?: {pair_id:string;claim:string}[];
     missing_context?: string[];
     classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
     action: "clarify" | "propose" | "analyze" | "cancel" | "answer";
@@ -217,6 +222,25 @@ export default function Workspace() {
   const [referenceFile,setReferenceFile]=useState("");
   const [shareReference,setShareReference]=useState(false);
   useEffect(()=>{setReferenceFile("");setShareReference(false);},[attachmentScope]);
+  const [compareFirst,setCompareFirst]=useState("");
+  const [compareSecond,setCompareSecond]=useState("");
+  const [shareComparison,setShareComparison]=useState(false);
+  const [localComparison,setLocalComparison]=useState<ComparisonShared|null>(null);
+  const [comparisonError,setComparisonError]=useState("");
+  const [comparisonBusy,setComparisonBusy]=useState(false);
+  const comparisonVersion=useRef(0);
+  useEffect(()=>{comparisonVersion.current++;setCompareFirst("");setCompareSecond("");setShareComparison(false);setLocalComparison(null);setComparisonError("");setComparisonBusy(false);},[attachmentScope]);
+  async function compareLocally(offset=0){
+    const first=attachments.find(file=>file.id===compareFirst), second=attachments.find(file=>file.id===compareSecond);
+    if(!first||!second||first.id===second.id||comparisonBusy)return;
+    const version=++comparisonVersion.current;
+    setComparisonBusy(true);setComparisonError("");setShareComparison(false);
+    try{
+      const result=await post<ComparisonShared>(`/api/conversations/${attachmentScope}/robot-reports/compare`,{first_id:first.id,first_sha256:first.sha256,second_id:second.id,second_sha256:second.sha256,offset,limit:20});
+      if(version===comparisonVersion.current)setLocalComparison(result);
+    }catch(e){if(version===comparisonVersion.current)setComparisonError(errorText(e));}
+    finally{if(version===comparisonVersion.current)setComparisonBusy(false);}
+  }
   const [reportFile,setReportFile]=useState("");
   const [reportPage,setReportPage]=useState<ReportPage|null>(null);
   const [reportOffset,setReportOffset]=useState(0);
@@ -226,6 +250,35 @@ export default function Workspace() {
   const [autoReport,setAutoReport]=useState(false);
   const [reportChunk,setReportChunk]=useState<{section_id:string;text_offset:number;text_sha256:string}|null>(null);
   useEffect(()=>{setReportChunk(null);setShareReport(false);setAutoReport(false);},[attachmentScope,reportFile,reportTest,sectionOffset]);
+  type ReportMatch = {test_id:string|null;test_name:string|null;suite_id:string|null;suite_path:string;scope:string|null;kind:string;section_id:string|null;name:string;text:string;text_offset:number;text_truncated:boolean};
+  type ReportSearchPage = {items:ReportMatch[];total:number;offset:number;next_offset:number|null;sha256:string};
+  const [searchTerm,setSearchTerm]=useState("");
+  const [searchPage,setSearchPage]=useState<ReportSearchPage|null>(null);
+  const [searchSelected,setSearchSelected]=useState<ReportMatch|null>(null);
+  const [searchError,setSearchError]=useState("");
+  const [localSuite,setLocalSuite]=useState<{suite:{id:string;suite_path:string;suite_path_truncated:boolean;status:string;status_message:string;status_message_truncated:boolean};items:{section_id:string;scope:string;kind:string;name:string;text:string;truncated:boolean}[];offset:number;total:number;next_offset:number|null}|null>(null);
+  const suiteVersion=useRef(0);
+  const [searchBusy,setSearchBusy]=useState(false);
+  const searchVersion=useRef(0);
+  useEffect(()=>{searchVersion.current++;suiteVersion.current++;setSearchTerm("");setSearchPage(null);setSearchSelected(null);setSearchError("");setSearchBusy(false);setLocalSuite(null);},[attachmentScope,reportFile]);
+  async function searchReport(offset=0){
+    if(!attachmentScope||!reportFile||!searchTerm.trim()||searchBusy)return;
+    const version=++searchVersion.current;
+    setSearchBusy(true);setSearchError("");
+    try {
+      const result=await post<ReportSearchPage>(`/api/conversations/${attachmentScope}/attachments/${reportFile}/robot-report/search`,{query:searchTerm,offset,limit:20});
+      if(version===searchVersion.current)setSearchPage(result);
+    }catch(e){if(version===searchVersion.current)setSearchError(errorText(e));}
+    finally{if(version===searchVersion.current)setSearchBusy(false);}
+  }
+  async function inspectLocalSuite(suiteId:string, offset=0){
+    const version=++suiteVersion.current;
+    setSearchError("");setShareReport(false);setAutoReport(false);setReportTest("");
+    try {
+      const result=await api<NonNullable<typeof localSuite>>(`/api/conversations/${attachmentScope}/attachments/${reportFile}/robot-report/suites?suite_id=${encodeURIComponent(suiteId)}&offset=${offset}&limit=20`);
+      if(version===suiteVersion.current)setLocalSuite(result);
+    }catch(e){if(version===suiteVersion.current)setSearchError(errorText(e));}
+  }
   const [reportError,setReportError]=useState("");
   useEffect(()=>{setReportFile("");setReportPage(null);setReportTest("");setShareReport(false);setReportOffset(0);setSectionOffset(0);},[attachmentScope]);
   useEffect(()=>{
@@ -262,7 +315,7 @@ export default function Workspace() {
     } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
     finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
-  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);setReferenceFile(current=>current===id?"":current);setShareReference(false);}catch(e){setAttachmentError(errorText(e));}}
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);setReferenceFile(current=>current===id?"":current);setShareReference(false);setCompareFirst(current=>current===id?"":current);setCompareSecond(current=>current===id?"":current);comparisonVersion.current++;setLocalComparison(null);setShareComparison(false);setComparisonBusy(false);}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -761,24 +814,25 @@ export default function Workspace() {
     setPlan(null);
     const version = revision.current;
     const autoUsed = autoReport && !!reportPage && !!reportFile && !!attachmentScope;
-    if (autoUsed && shareSources) {
-      aiLock.current = false; actionLock.current = false; setAiPendingConversation(null); setBusy("");
-      setError("Disable original source sharing before using automatic report search."); return;
-    }
     const manualReportUsed = shareReport && !!reportPage && !!reportTest && !!reportFile && !!attachmentScope;
     const reference = attachments.find(file=>file.id===referenceFile);
     const referenceUsed = shareReference && !!reference && !!attachmentScope;
-    const reportUsed = manualReportUsed || autoUsed || referenceUsed;
+    const firstComparison = attachments.find(file=>file.id===compareFirst);
+    const secondComparison = attachments.find(file=>file.id===compareSecond);
+    const comparisonUsed = shareComparison && !!firstComparison && !!secondComparison && firstComparison.id!==secondComparison.id && !!attachmentScope;
+    const reportUsed = manualReportUsed || autoUsed || referenceUsed || comparisonUsed;
+    const comparisonAttachment = comparisonUsed ? {conversation_id:attachmentScope,first_id:firstComparison!.id,first_sha256:firstComparison!.sha256,second_id:secondComparison!.id,second_sha256:secondComparison!.sha256,offset:localComparison?.offset ?? 0,share:true} : null;
     const referenceAttachment = referenceUsed ? {conversation_id:attachmentScope,attachment_id:reference!.id,sha256:reference!.sha256,share:true} : null;
     const reportAttachment = manualReportUsed && !autoUsed ? {conversation_id:attachmentScope, attachment_id:reportFile, sha256:reportPage!.sha256, test_id:reportTest, offset:sectionOffset, share:true, ...(reportChunk || {})} : null;
-    const autoAttachment = autoUsed ? {conversation_id:attachmentScope,attachment_id:reportFile,sha256:reportPage!.sha256,share:true} : null;
-    setShareReport(false);setAutoReport(false);setShareReference(false);
+    const autoAttachment = autoUsed ? {conversation_id:attachmentScope,attachment_id:reportFile,sha256:reportPage!.sha256,share:true,search_all:true,include_suites:true} : null;
+    setShareReport(false);setAutoReport(false);setShareReference(false);setShareComparison(false);
     try {
       const value = await post<AiReply>("/api/assistant/chat", {
         message: text,
         report_attachment: reportAttachment,
         auto_report: autoAttachment,
         reference_attachment: referenceAttachment,
+        comparison: comparisonAttachment,
         propose_knowledge: proposeKnowledge,
         share_context: true,
         include_source_context: shareSources,
@@ -1122,7 +1176,9 @@ export default function Workspace() {
               </div>
               <div className="ai-body">
                 {aiReply.reference_shared && <section aria-label="Reference details shared with AI"><h3>Reference details shared with AI</h3><p>User-uploaded, unverified reference; not proof of deployed behavior. SHA-256 {aiReply.reference_shared.sha256}. {aiReply.reference_shared.omitted_sections} of {aiReply.reference_shared.total_sections} text sections not shared. {aiReply.reference_shared.non_text_pages?.length ? `No extractable text on PDF pages ${aiReply.reference_shared.non_text_pages.join(", ")}; OCR is not supported.` : "Images are not interpreted; OCR is not supported."} Citation membership does not verify the claim.</p><ul>{(aiReply.answer.reference_citations || []).map((citation,i)=><li key={i}><a href={`#reference-section-${citation.section_id}`}>Reference {citation.section_id}</a>: {citation.claim}</li>)}</ul><ul>{aiReply.reference_shared.sections.map(section=><li id={`reference-section-${section.id}`} key={section.id}>{section.location}{section.text_offset ? `, from character ${section.text_offset}` : ""}: {section.text}{section.truncated ? " [partial]" : ""}</li>)}</ul></section>}
-                {aiReply.auto_report && <section aria-label="Automatic report search"><h3>Automatic report search</h3><p>{aiReply.auto_report.total_failures} failed tests in {aiReply.auto_report.total_tests} total tests; {aiReply.auto_report.listed_failures} distinct failures listed to AI; sections shared from {aiReply.auto_report.tests_with_sections_shared} tests. {aiReply.auto_report.coverage} {(aiReply.auto_report.budget_diagnostics || []).join(" ")} {aiReply.auto_report.listed_failures < aiReply.auto_report.total_failures ? "Some failures were not listed." : ""}</p><ul>{(aiReply.auto_report.trace || []).map((step,i)=><li key={i}>{step.operation === "read_test" ? `Test ${step.test_id}: ${step.count} sections from ${step.offset}` : `Failure list: ${step.count} names from ${step.offset}`}</li>)}</ul></section>}
+                {aiReply.auto_report && <section aria-label="Automatic report search"><h3>Automatic report search</h3><p>{aiReply.auto_report.total_failures} failed tests in {aiReply.auto_report.total_tests} total tests; {aiReply.auto_report.listed_failures} distinct failures listed to AI; sections shared from {aiReply.auto_report.tests_with_sections_shared} tests. {aiReply.auto_report.coverage} {(aiReply.auto_report.budget_diagnostics || []).join(" ")} {aiReply.auto_report.listed_failures < aiReply.auto_report.total_failures ? "Some failures were not listed." : ""}</p><ul>{(aiReply.auto_report.trace || []).map((step,i)=><li key={i}>{(step.operation === "read_test" || step.operation === "read_section") ? `Test ${step.test_id}: ${step.count} sections from ${step.offset}` : step.operation === "search_report" ? `Report search: ${step.count} matches from ${step.offset}` : step.operation === "list_suites" ? `Suites: ${step.count} from ${step.offset}` : step.operation === "read_suite" ? `Suite ${step.suite_id}: ${step.count} sections from ${step.offset}` : `Failure list: ${step.count} names from ${step.offset}`}</li>)}</ul></section>}
+                {aiReply.comparison_shared && <section aria-label="Comparison shared with AI"><h3>Report comparison shared with AI</h3><p>Reports {aiReply.comparison_shared.first_sha256} → {aiReply.comparison_shared.second_sha256}. {aiReply.comparison_shared.total} unique test pairs; {aiReply.comparison_shared.ambiguous_first_tests} ambiguous or unnamed first-report tests excluded. {aiReply.comparison_shared.limitations.join(" ")}</p><ul>{(aiReply.answer.comparison_citations || []).map((citation,i)=><li key={i}><a href={`#comparison-pair-${citation.pair_id}`}>Comparison {citation.pair_id}</a>: {citation.claim}</li>)}</ul><ul>{aiReply.comparison_shared.items.map(item=><li id={`comparison-pair-${item.pair_id}`} key={item.pair_id}>{item.suite_path}{item.suite_path_truncated?" [partial]":""} / {item.test_name}{item.test_name_truncated?" [partial]":""}: {item.first_status} → {item.second_status} ({item.transition})</li>)}</ul>{aiReply.comparison_shared.next_offset !== null && <p>More matched pairs were not shared.</p>}</section>}
+                {aiReply.suite_shared && <section aria-label="Suite details shared with AI"><h3>Suite details shared with AI</h3><p>Suite {aiReply.suite_shared.suite.suite_path}{aiReply.suite_shared.suite.suite_path_truncated ? " [partial]" : ""} ({aiReply.suite_shared.suite.status}); SHA-256 {aiReply.suite_shared.sha256}. {aiReply.suite_shared.suite.status_message}{aiReply.suite_shared.suite.status_message_truncated ? " [partial]" : ""} Showing {aiReply.suite_shared.items.length} of {aiReply.suite_shared.total} sections from {aiReply.suite_shared.offset}. {aiReply.suite_shared.next_offset !== null ? "More suite sections were not shared." : ""} Suite failure does not prove separate root causes for child tests.</p><ul>{(aiReply.answer.suite_citations || []).map((citation,i)=><li key={i}><a href={`#suite-section-${citation.section_id}`}>Suite section {citation.section_id}</a>: {citation.claim}</li>)}</ul><ul>{aiReply.suite_shared.items.map(item=><li id={`suite-section-${item.section_id}`} key={item.section_id}>{item.scope} · {item.kind} {item.name}: {item.text}{item.truncated ? " [partial]" : ""}</li>)}</ul></section>}
                 {aiReply.report_shared && <section aria-label="Report details shared with AI"><h3>Report details shared with AI</h3><p>User-uploaded file; association with a pipeline is unverified. Test {aiReply.report_shared.test_id}: {aiReply.report_shared.test.suite_path ? `${aiReply.report_shared.test.suite_path}${aiReply.report_shared.test.suite_path_truncated ? "…" : ""} / ` : ""}{aiReply.report_shared.test.name} ({aiReply.report_shared.test.status}); SHA-256 {aiReply.report_shared.sha256}. Showing {aiReply.report_shared.items.length} of {aiReply.report_shared.total} sections, starting at {aiReply.report_shared.offset}. {aiReply.report_shared.next_offset !== null ? "More sections were not shared." : ""} A section may be truncated; citation membership does not validate AI claims.</p>{(aiReply.answer.report_citations || []).length > 0 && <ul aria-label="Report citations">{aiReply.answer.report_citations!.map((citation,i)=><li key={i}><a href={`#report-section-${citation.section_id}`}>Section {citation.section_id}</a>: {citation.claim}</li>)}</ul>}<ul>{aiReply.report_shared.items.map(item=><li id={`report-section-${item.section_id}`} key={item.section_id}>Section {item.section_id} · {item.kind} {item.name} {item.status || ""}: {item.text}{item.truncated ? " [partial]" : ""} (characters {item.text_offset ?? 0}–{(item.text_offset ?? 0) + Array.from(item.text).length}) {item.next_text_offset != null && aiReply.report_shared!.attachment_id===reportFile && aiReply.report_shared!.test_id===reportTest && aiReply.report_shared!.sha256===reportPage?.sha256 && <button type="button" onClick={()=>{setReportChunk({section_id:item.section_id,text_offset:item.next_text_offset!,text_sha256:item.text_sha256});setShareReport(false);}}>Use next part of section {item.section_id}</button>}</li>)}</ul></section>}
                 {aiReply.source_manifest && <SourceReferences key={aiReply.source_manifest.id} manifest={aiReply.source_manifest} citations={aiReply.answer.source_citations || []}/>}
                 {aiReply.planning_knowledge && <section aria-label="Planning knowledge"><h3>Planning references</h3><p>Reference knowledge, not observed run evidence.</p>{Object.entries(aiReply.planning_knowledge).map(([category,bundle])=>bundle && <div key={category}><strong>{category}</strong><ul>{bundle.sources.map(source=><li key={source.id}>{source.path} · SHA256 {source.sha256}</li>)}{bundle.diagnostics.map((d,i)=><li key={i}>{d}</li>)}</ul></div>)}</section>}
@@ -1606,11 +1662,14 @@ export default function Workspace() {
         <div className="composer-wrap" ref={composerWrap}>
 
           {attachments.some(file=>/\.(txt|md|pdf|docx)$/i.test(file.filename)) && <section className="report-search-controls" aria-label="Optional reference for next AI message"><label>Reference document <select value={referenceFile} disabled={Boolean(busy)} onChange={e=>{setReferenceFile(e.target.value);setShareReference(false);}}><option value="">No reference document</option>{attachments.filter(file=>/\.(txt|md|pdf|docx)$/i.test(file.filename)).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>{referenceFile && <label><input type="checkbox" checked={shareReference} onChange={e=>setShareReference(e.target.checked)} /> Share up to three relevant sections from this document with the configured AI provider for the next message. Content may contain sensitive data; redaction is best effort.</label>}</section>}
+          {attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).length>=2 && <section className="report-search-controls" aria-label="Compare two reports"><label>Earlier report <select value={compareFirst} onChange={e=>{comparisonVersion.current++;setCompareFirst(e.target.value);setShareComparison(false);setLocalComparison(null);setComparisonError("");setComparisonBusy(false);}}><option value="">Select report</option>{attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label><label>Later report <select value={compareSecond} onChange={e=>{comparisonVersion.current++;setCompareSecond(e.target.value);setShareComparison(false);setLocalComparison(null);setComparisonError("");setComparisonBusy(false);}}><option value="">Select report</option>{attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>{compareFirst && compareSecond && compareFirst!==compareSecond && <><button type="button" disabled={comparisonBusy} onClick={()=>void compareLocally()}>Compare locally</button><label><input type="checkbox" checked={shareComparison} onChange={e=>setShareComparison(e.target.checked)} /> Share the selected page of up to 20 matched test comparisons and totals with the AI provider for the next message. Report environments and revisions are unverified; a fail-to-pass change alone does not prove flakiness.</label></>}{comparisonError && <p role="alert">{comparisonError}</p>}{localComparison && <><p>Local comparison: {localComparison.total} matched test pairs. {localComparison.limitations.join(" ")}</p><ul>{localComparison.items.map(item=><li key={item.pair_id}>{item.suite_path} / {item.test_name}: {item.first_status} → {item.second_status}</li>)}</ul><button type="button" disabled={comparisonBusy||localComparison.offset===0} onClick={()=>void compareLocally(Math.max(0,localComparison.offset-20))}>Previous comparisons</button><button type="button" disabled={comparisonBusy||localComparison.next_offset===null} onClick={()=>void compareLocally(localComparison.next_offset!)}>Next comparisons</button></>}</section>}
           {attachments.some(file=>file.filename.toLowerCase().endsWith(".xml")) && <section className="report-search-controls" aria-label="Report context for next AI message">
             <label>Robot report <select value={reportFile} disabled={Boolean(busy)} onChange={e=>{setReportFile(e.target.value);setReportOffset(0);setSectionOffset(0);setShareReport(false);}}><option value="">Do not share a report</option>{attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>
             {reportError && <p role="alert">{reportError}</p>}
-            {reportPage && <><label>Failure <select value={reportTest} onChange={e=>{setReportTest(e.target.value);setSectionOffset(0);setShareReport(false);}}><option value="">Select a failure</option>{reportPage.items.map(item=><option key={item.id} value={item.id}>{item.suite_path ? `${item.suite_path}${item.suite_path_truncated ? "…" : ""} / ` : ""}{item.name} (test {item.id})</option>)}</select></label><p>{reportPage.total} failed tests; showing {reportPage.items.length} from {reportPage.offset + 1}.</p><button type="button" disabled={reportOffset===0} onClick={()=>setReportOffset(Math.max(0,reportOffset-20))}>Previous failures</button><button type="button" disabled={reportPage.next_offset===null} onClick={()=>setReportOffset(reportPage.next_offset!)}>Next failures</button></>}
-            {reportPage && <label><input type="checkbox" checked={autoReport} onChange={e=>{setAutoReport(e.target.checked);if(e.target.checked)setShareReport(false);}} /> Let AI search this report for the next message. AI may inspect failure names and redacted test sections and send them to the configured provider. The report may contain sensitive data; redaction is best effort. Original source sharing must be off.</label>}
+            {reportPage && <><label>Report test <select value={reportTest} onChange={e=>{setReportTest(e.target.value);setSectionOffset(0);setShareReport(false);}}><option value="">Select a test</option>{searchSelected?.test_id && !reportPage.items.some(item=>item.id===searchSelected.test_id) && <option value={searchSelected.test_id!}>{searchSelected.suite_path ? `${searchSelected.suite_path} / ` : ""}{searchSelected.test_name} (test {searchSelected.test_id})</option>}{reportPage.items.map(item=><option key={item.id} value={item.id}>{item.suite_path ? `${item.suite_path}${item.suite_path_truncated ? "…" : ""} / ` : ""}{item.name} (test {item.id})</option>)}</select></label><p>{reportPage.total} failed tests; showing {reportPage.items.length} from {reportPage.offset + 1}.</p><button type="button" disabled={reportOffset===0} onClick={()=>setReportOffset(Math.max(0,reportOffset-20))}>Previous failures</button><button type="button" disabled={reportPage.next_offset===null} onClick={()=>setReportOffset(reportPage.next_offset!)}>Next failures</button></>}
+            {reportPage && <div><label>Search report <input value={searchTerm} maxLength={200} onChange={e=>{searchVersion.current++;setSearchTerm(e.target.value);setSearchPage(null);setSearchError("");setSearchBusy(false);}} /></label><button type="button" disabled={searchBusy||!searchTerm.trim()} onClick={()=>void searchReport()}>Search locally</button>{searchError && <p role="alert">{searchError}</p>}{searchPage && <><p>{searchPage.total} matches; showing {searchPage.items.length} from {searchPage.offset+1}. Search is local until a section is explicitly shared.</p><ul>{searchPage.items.map((item,i)=><li key={`${item.test_id}-${item.section_id}-${i}`}><button type="button" onClick={()=>{if(item.suite_id!==null){void inspectLocalSuite(item.suite_id,item.section_id===null?0:Number(item.section_id));return;} if(item.test_id===null)return; suiteVersion.current++;setLocalSuite(null);setSearchSelected(item);setReportTest(item.test_id);setSectionOffset(item.section_id===null?0:Number(item.section_id));setShareReport(false);setAutoReport(false);}}>{item.suite_path}{item.test_name ? ` / ${item.test_name}` : ""} · {item.scope || item.kind} {item.name}</button>: {item.text}{item.text_truncated ? " [partial]" : ""}</li>)}</ul><button type="button" disabled={searchBusy||searchPage.offset===0} onClick={()=>void searchReport(Math.max(0,searchPage.offset-20))}>Previous matches</button><button type="button" disabled={searchBusy||searchPage.next_offset===null} onClick={()=>void searchReport(searchPage.next_offset!)}>Next matches</button></>}</div>}
+            {localSuite && <section aria-label="Local suite details"><h3>Local suite: {localSuite.suite.suite_path}{localSuite.suite.suite_path_truncated ? " [partial]" : ""}</h3><p>{localSuite.suite.status}: {localSuite.suite.status_message}{localSuite.suite.status_message_truncated ? " [partial]" : ""}. Local inspection only; not shared with AI.</p><ul>{localSuite.items.map(item=><li key={item.section_id}>{item.scope} · {item.kind} {item.name}: {item.text}{item.truncated ? " [partial]" : ""}</li>)}</ul><p>Showing {localSuite.items.length} of {localSuite.total} suite sections.</p><button type="button" disabled={localSuite.offset===0} onClick={()=>void inspectLocalSuite(localSuite.suite.id,Math.max(0,localSuite.offset-20))}>Previous suite sections</button><button type="button" disabled={localSuite.next_offset===null} onClick={()=>void inspectLocalSuite(localSuite.suite.id,localSuite.next_offset!)}>Next suite sections</button></section>}
+            {reportPage && <label><input type="checkbox" checked={autoReport} onChange={e=>{setAutoReport(e.target.checked);if(e.target.checked)setShareReport(false);}} /> Let AI search this report for the next message. AI may search test names, keywords and logs, including passing tests, inspect suite setup and teardown, and share redacted sections and send them to the configured provider. The report may contain sensitive data; redaction is best effort.</label>}
             {reportTest && <>{reportChunk && <p>Next request: section {reportChunk.section_id} from character {reportChunk.text_offset}. <button type="button" onClick={()=>{setReportChunk(null);setShareReport(false);}}>Clear continuation</button></p>}<label>Starting section <input type="number" min={0} max={100000} value={sectionOffset} onChange={e=>{setSectionOffset(Math.max(0,Math.min(100000,Number(e.target.value)||0)));setShareReport(false);}} /></label><label><input type="checkbox" checked={shareReport} onChange={e=>{setShareReport(e.target.checked);if(e.target.checked)setAutoReport(false);}} /> Share up to 20 sections from this test with the configured AI provider for the next message. Report content may contain sensitive data; redaction is best effort.</label></>}
           </section>}
           <form className="composer" onSubmit={sendCommand}>

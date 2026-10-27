@@ -173,6 +173,22 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
                                     test_id: str | None = Query(default=None, max_length=10)):
         return conversation_files.report(conversation_id, attachment_id, offset, limit, test_id)
 
+    @app.post('/api/conversations/{conversation_id}/robot-reports/compare')
+    def compare_conversation_reports(conversation_id: str, body: ReportComparison):
+        return conversation_files.compare_reports(conversation_id, body.first_id, body.first_sha256,
+            body.second_id, body.second_sha256, body.offset, body.limit)
+
+    @app.get('/api/conversations/{conversation_id}/attachments/{attachment_id}/robot-report/suites')
+    def inspect_conversation_suites(conversation_id: str, attachment_id: str,
+                                    offset: int = Query(default=0, ge=0, le=100000),
+                                    limit: int = Query(default=20, ge=1, le=50),
+                                    suite_id: str | None = Query(default=None, max_length=10)):
+        return conversation_files.suites(conversation_id, attachment_id, offset, limit, suite_id)
+
+    @app.post('/api/conversations/{conversation_id}/attachments/{attachment_id}/robot-report/search')
+    def search_conversation_report(conversation_id: str, attachment_id: str, body: ReportSearch):
+        return conversation_files.search_report(conversation_id, attachment_id, body.query, body.offset, body.limit, include_suites=True)
+
     @app.delete('/api/conversations/{conversation_id}/attachments/{attachment_id}')
     def delete_conversation_attachment(conversation_id: str, attachment_id: str):
         return conversation_files.delete(conversation_id, attachment_id)
@@ -310,6 +326,21 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
 
 class Message(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
+
+
+class ReportComparison(Contract):
+    first_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    first_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    second_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    second_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    offset: int = Field(default=0, ge=0, le=100000)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class ReportSearch(Contract):
+    query: str = Field(min_length=1, max_length=200)
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=20, ge=1, le=50)
 
 
 class Confirmation(Contract):

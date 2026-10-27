@@ -32,8 +32,8 @@ relevant text, section continuation and document-wide model-directed search are 
 implemented, and only the shared snippets support citations. Reference attachment
 sharing uses one-request consent; task-scoped approval, deny/resume, expiry, and
 multi-file references remain follow-ups. Reference attachments can accompany automatic
-report search, but that search still cannot be combined with registered original-source
-retrieval in the same request. No source establishes deployed behavior on its own.
+report search and separately approved registered original-source retrieval in the
+same request, subject to the source round and input budgets. No source establishes deployed behavior on its own.
 
 For local testing, install dependencies with `python -m pip install -e '.[dev]'`, build
 the frontend, start the backend on loopback, then attach synthetic report and document
@@ -41,5 +41,6 @@ fixtures. Review the displayed sharing and coverage before asking the model. Do 
 publish private test reports or TRDs in the repository or public issue.
 
 Automatic report discovery has a 110,000-byte cumulative serialized model-input
-budget across rounds, with a 64,000-byte per-call limit. This accommodates the
+budget across rounds, with a 64,000-byte per-call limit. When source retrieval is
+also enabled, the configured source cumulative budget and model-round limit apply. This accommodates the
 additional citation schema; budgets measure serialized input rather than tokens.

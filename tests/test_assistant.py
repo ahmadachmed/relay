@@ -719,7 +719,6 @@ def test_automatic_report_search_reads_only_discovered_failed_test(harness):
     assert result.json()['auto_report']['tests_with_sections_shared'] == 1
     assert [step['operation'] for step in result.json()['auto_report']['trace']] == ['list_failures', 'list_failures', 'read_test']
     assert post(client, auto_report={**ref, 'share':False}).status_code == 422
-    assert post(client, auto_report=ref, include_source_context=True).status_code == 422
     other = client.post('/api/conversations').json()['id']
     assert post(client, auto_report={**ref,'conversation_id':other}).status_code == 404
     assert post(client, auto_report={**ref,'sha256':'0'*64}).status_code == 409
@@ -928,3 +927,192 @@ def test_auto_report_omits_optional_knowledge_for_selected_detail(harness, monke
     assert result.status_code == 200, result.text
     assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
     assert result.json()['report_shared']['items']
+
+
+def test_auto_report_literal_search_discovers_and_reads_passing_test(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite name="Root"><test name="passing"><msg>Connection timeout</msg><status status="PASS"/></test><test name="failed"><status status="FAIL"/></test></suite></robot>'
+    attachment = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':attachment['id'],'sha256':attachment['sha256'],'share':True,'search_all':True}
+    class Provider:
+        calls = 0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'search_report','query':'timeout','test_id':None,'offset':0}])
+            if self.calls == 2:
+                assert context['auto_report']['search_results']['items'][0]['test_id'] == '0'
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['report_attachment']['test']['status'] == 'PASS'
+            return answer(action='answer', report_citations=[{'section_id':'0','claim':'Observed timeout'}])
+    app.state.assistant.provider = Provider()
+    response = post(client, auto_report=ref)
+    assert response.status_code == 200, response.text
+    assert response.json()['auto_report']['listed_failures'] == 1
+    assert response.json()['report_shared']['items'][0]['text'] == 'Connection timeout'
+    assert [step['operation'] for step in response.json()['auto_report']['trace']] == ['list_failures','search_report','read_test']
+
+
+def test_auto_report_search_redaction_changes_invalidate_result(harness, monkeypatch):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="passing"><msg>example-sensitive-search-secret</msg><status status="PASS"/></test></suite></robot>'
+    attachment = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':attachment['id'],'sha256':attachment['sha256'],'share':True,'search_all':True}
+    class Provider:
+        calls = 0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'search_report','query':'sensitive','test_id':None,'offset':0}])
+            monkeypatch.setenv('RELAY_SEARCH_SECRET', 'example-sensitive-search-secret')
+            return answer(action='answer')
+    app.state.assistant.provider = Provider()
+    assert post(client, auto_report=ref).status_code == 409
+
+
+def test_auto_report_search_all_requires_explicit_boolean_consent(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=b'<robot><suite><test name="pass"><msg>timeout</msg><status status="PASS"/></test></suite></robot>').json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        async def answer(self, context):
+            return answer(action='answer',report_operations=[{'operation':'search_report','query':'timeout','test_id':None,'offset':0}])
+    app.state.assistant.provider=Provider()
+    assert post(client,auto_report=ref).status_code==502
+    assert post(client,auto_report={**ref,'search_all':'true'}).status_code==422
+
+
+def test_auto_report_continues_only_offered_redacted_section(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    message='x'*2100+' final detail'
+    body=('<robot><suite><test name="fail"><msg>'+message+'</msg><status status="FAIL"/></test></suite></robot>').encode()
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:
+                return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            if self.calls==2:
+                section=context['report_attachment']['items'][0]
+                assert section['next_text_offset']==2000
+                return answer(action='answer',report_operations=[{'operation':'read_section','test_id':'0','query':'0','offset':2000}])
+            assert 'final detail' in context['report_attachment']['items'][0]['text']
+            return answer(action='answer',report_citations=[{'section_id':'0','claim':'Continuation'}])
+    app.state.assistant.provider=Provider()
+    response=post(client,auto_report=ref)
+    assert response.status_code==200, response.text
+    assert response.json()['report_shared']['items'][0]['text_offset']==2000
+    assert response.json()['auto_report']['trace'][-1]['operation']=='read_section'
+
+
+def test_auto_report_rejects_unoffered_section_continuation(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=b'<robot><suite><test name="fail"><msg>short</msg><status status="FAIL"/></test></suite></robot>').json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:
+                return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            return answer(action='answer',report_operations=[{'operation':'read_section','test_id':'0','query':'0','offset':2000}])
+    app.state.assistant.provider=Provider()
+    assert post(client,auto_report=ref).status_code==502
+
+
+def test_auto_report_suite_setup_has_separate_citations_and_explicit_consent(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><kw name="setup" type="SETUP"><msg>database unavailable</msg><status status="FAIL"/></kw><test name="blocked"><status status="FAIL"/></test><status status="FAIL">setup failed</status></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:
+                return answer(action='answer',report_operations=[{'operation':'list_suites','suite_id':None,'test_id':None,'query':None,'offset':0}])
+            if self.calls==2:
+                assert context['auto_report']['suite_results']['items'][0]['status']=='FAIL'
+                return answer(action='answer',report_operations=[{'operation':'read_suite','suite_id':'0','test_id':None,'query':None,'offset':0}])
+            assert context['suite_attachment']['items'][0]['text']=='database unavailable'
+            return answer(action='answer',suite_citations=[{'section_id':'0','claim':'Setup failed'}])
+    app.state.assistant.provider=Provider()
+    assert post(client,auto_report=ref).status_code==502
+    app.state.assistant.provider=Provider()
+    result=post(client,auto_report={**ref,'include_suites':True})
+    assert result.status_code==200, result.text
+    assert result.json()['suite_shared']['items'][0]['scope']=='SETUP'
+    assert result.json()['answer']['suite_citations'][0]['section_id']=='0'
+    assert result.json()['report_shared'] is None
+
+
+def test_auto_report_rejects_undiscovered_suite_and_unshared_citation(harness):
+    app,client,fake=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><status status="FAIL"/></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True,'include_suites':True}
+    fake.result=answer(action='answer',report_operations=[{'operation':'read_suite','suite_id':'0','test_id':None,'query':None,'offset':0}])
+    assert post(client,auto_report=ref).status_code==502
+    fake.result=answer(action='answer',suite_citations=[{'section_id':'0','claim':'not shared'}])
+    assert post(client,auto_report=ref).status_code==502
+
+
+def test_suite_redaction_change_during_model_call_invalidates_answer(harness,monkeypatch):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><kw name="setup" type="SETUP"><msg>example-suite-secret</msg><status status="FAIL"/></kw><status status="FAIL"/></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True,'include_suites':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1: return answer(action='answer',report_operations=[{'operation':'list_suites','suite_id':None,'test_id':None,'query':None,'offset':0}])
+            if self.calls==2: return answer(action='answer',report_operations=[{'operation':'read_suite','suite_id':'0','test_id':None,'query':None,'offset':0}])
+            monkeypatch.setenv('RELAY_SUITE_SECRET','example-suite-secret')
+            return answer(action='answer')
+    app.state.assistant.provider=Provider()
+    assert post(client,auto_report=ref).status_code==409
+
+
+def test_auto_report_search_discovers_suite_setup_only_with_explicit_suite_access(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><kw name="setup" type="SETUP"><msg>database unavailable</msg><status status="FAIL"/></kw><status status="FAIL"/></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True,'search_all':True,'include_suites':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1: return answer(action='answer',report_operations=[{'operation':'search_report','query':'database','test_id':None,'offset':0}])
+            if self.calls==2:
+                assert context['auto_report']['search_results']['items'][0]['suite_id']=='0'
+                return answer(action='answer',report_operations=[{'operation':'read_suite','suite_id':'0','test_id':None,'offset':0}])
+            assert context['suite_attachment']['items'][0]['text']=='database unavailable'
+            return answer(action='answer',suite_citations=[{'section_id':'0','claim':'Database unavailable'}])
+    app.state.assistant.provider=Provider()
+    result=post(client,auto_report=ref)
+    assert result.status_code==200, result.text
+    assert result.json()['answer']['suite_citations'][0]['section_id']=='0'
+    # Without suite consent the search cannot discover its setup at all.
+    class WithoutSuiteConsent:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1: return answer(action='answer',report_operations=[{'operation':'search_report','query':'database','test_id':None,'offset':0}])
+            assert context['auto_report']['search_results']['items']==[]
+            return answer(action='answer')
+    app.state.assistant.provider=WithoutSuiteConsent()
+    assert post(client,auto_report={**ref,'include_suites':False}).status_code==200

@@ -508,3 +508,58 @@ asyncio.run(main())
         result=subprocess.run([sys.executable,'-c',code],env={**os.environ,'PYTHONHASHSEED':seed},capture_output=True,text=True,check=True,timeout=15)
         outputs.append(json.loads(result.stdout))
     assert outputs == [['GET /voucher']]*4
+
+
+def test_approved_report_and_source_can_be_used_together(harness):
+    app,client,_,root,config=harness
+    scope=client.post('/api/conversations').json()['id']
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=b'<robot><suite><test name="voucher"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>').json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    def respond(context,index):
+        if index == 1:
+            assert context['source_context']['sections']
+            return answer(report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+        assert context['report_attachment']['items'][0]['text']=='HTTP 500'
+        return answer(report_citations=[{'section_id':'0','claim':'Observed 500'}],source_citations=[{'handle':context['source_context']['sections'][0]['handle'],'claim':'Reference'}])
+    app.state.assistant.provider=Fake(respond)
+    result=post(client,source_ids=['contract'],auto_report=ref)
+    assert result.status_code==200, result.text
+    assert result.json()['report_shared']['items'][0]['text']=='HTTP 500'
+    assert result.json()['source_manifest']['sources']
+    assert result.json()['answer']['report_citations'] and result.json()['answer']['source_citations']
+
+
+def test_combined_request_discards_answer_when_source_consent_revoked(harness):
+    app,client,_,root,config=harness
+    scope=client.post('/api/conversations').json()['id']
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=b'<robot><suite><test name="voucher"><status status="FAIL"/></test></suite></robot>').json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    def respond(context,index):
+        value=json.loads(config.read_text())
+        value['sources']['contract']['enabled']=False
+        config.write_text(json.dumps(value))
+        return answer()
+    app.state.assistant.provider=Fake(respond)
+    response=post(client,source_ids=['contract'],auto_report=ref)
+    assert response.status_code in (403,409), response.text
+
+
+def test_report_source_and_optional_reference_keep_distinct_citations(harness):
+    app,client,_,root,config=harness
+    scope=client.post('/api/conversations').json()['id']
+    path=f'/api/conversations/{scope}/attachments'
+    report=client.post(path,params={'filename':'output.xml'},content=b'<robot><suite><test name="voucher"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>').json()
+    document=client.post(path,params={'filename':'requirements.txt'},content=b'Voucher must be active').json()
+    ref=lambda item: {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    def respond(context,index):
+        if index == 1:
+            assert context['reference_attachment']['sections'] and context['source_context']['sections']
+            return answer(report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+        return answer(report_citations=[{'section_id':'0','claim':'Observed 500'}],
+            source_citations=[{'handle':context['source_context']['sections'][0]['handle'],'claim':'Source'}],
+            reference_citations=[{'section_id':context['reference_attachment']['sections'][0]['id'],'claim':'Requirement'}])
+    app.state.assistant.provider=Fake(respond)
+    result=post(client,source_ids=['contract'],auto_report=ref(report),reference_attachment=ref(document))
+    assert result.status_code==200, result.text
+    data=result.json()
+    assert data['answer']['report_citations'] and data['answer']['source_citations'] and data['answer']['reference_citations']
