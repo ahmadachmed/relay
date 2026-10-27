@@ -65,3 +65,21 @@ def test_unsupported_xml_encoding_returns_422(tmp_path, encoding):
     response = client.get(path + '/' + upload.json()['id'] + '/robot-report')
     assert response.status_code == 422
     assert response.json()['detail']['code'] == 'invalid_report'
+
+
+def test_suite_paths_disambiguate_failures_and_are_redacted():
+    body = b'<robot><suite name="Root"><suite name="First"><test name="login"><status status="FAIL"/></test></suite><suite name="Second"><test name="login"><status status="FAIL"/></test></suite></suite></robot>'
+    sanitize = lambda text: text.replace('First', '[REDACTED]')
+    failures = inspect_robot(body, 'hash', sanitize=sanitize)['items']
+    assert [(x['id'], x['suite_path']) for x in failures] == [('0', 'Root / [REDACTED]'), ('1', 'Root / Second')]
+    detail = inspect_robot(body, 'hash', test_id='1', sanitize=sanitize)
+    assert detail['test']['suite_path'] == 'Root / Second'
+    assert detail['test']['suite_path_truncated'] is False
+
+
+def test_suite_path_is_bounded_and_discloses_truncation():
+    name = 'a' * 300
+    body = ('<robot>' + ''.join(f'<suite name="{name}">' for _ in range(3)) + '<test name="x"><status status="FAIL"/></test>' + '</suite>' * 3 + '</robot>').encode()
+    item = inspect_robot(body, 'hash')['items'][0]
+    assert len(item['suite_path']) == 600
+    assert item['suite_path_truncated'] is True

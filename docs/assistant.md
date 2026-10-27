@@ -25,6 +25,8 @@ AI can clarify a request, propose one configured selection, analyze the selected
 
 Observed pipeline/report facts are rendered separately from model guidance. Hypotheses are explicitly unverified and must reference available parsed artifacts for that selected run; missing or expired evidence cannot support citations. Attempt counts remain unknown when the source does not report them. Bug reports remain reviewable drafts; nothing is published automatically. Citation validation checks artifact ownership/availability, not whether a model's interpretation is semantically correct.
 
+Uploaded Robot reports show the containing suite path for each failure and shared test detail. Suite names are redacted before model sharing; paths are bounded and truncation is shown. Test IDs remain necessary when names or paths are identical. Suite setup/teardown outside tests is not yet inspected.
+
 Conversation continuity uses the existing local browser history. Only the current page's latest AI suggestion card is held in memory; raw report text is not persisted by this feature. Treat model prose as untrusted guidance and verify it against the report links.
 
 ## Bounds and failure behavior
