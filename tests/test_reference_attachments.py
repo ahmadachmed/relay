@@ -219,3 +219,21 @@ def test_reference_window_uses_original_unicode_offsets(setup):
     section=result.json()['reference_shared']['sections'][0]
     assert section['text_offset'] < 1800 and 'expected login 200' in section['text']
     assert section['text']==text[section['text_offset']:section['text_offset']+1500]
+
+
+def test_unicode_expansion_preserves_unique_section_ids(setup):
+    app,c,scope,fake=setup
+    text=('İ'*1800+' expected login 200\n'+'İ'*1800+' expected login 400')
+    item=upload(c,scope,'unicode-sections.txt',text.encode())
+    result=ask(c,reference_attachment=ref(scope,item))
+    assert result.status_code==200, result.text
+    sections=result.json()['reference_shared']['sections']
+    assert [(s['id'],s['location']) for s in sections]==[('0','line 1'),('1','line 2')]
+
+
+def test_large_unicode_reference_within_limits(setup):
+    app,c,scope,fake=setup
+    item=upload(c,scope,'emoji.txt',('😀'*130000).encode())
+    result=ask(c,reference_attachment=ref(scope,item))
+    assert result.status_code==200, result.text
+    assert result.json()['reference_shared']['sections'][0]['truncated']

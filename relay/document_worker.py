@@ -80,7 +80,7 @@ def main():
         result = extract(sys.argv[1], sys.stdin.buffer.read(5_000_001))
     except Exception:
         result = {'error': 'document_invalid'}
-    sys.stdout.write(json.dumps(result, ensure_ascii=True))
+    sys.stdout.write(json.dumps(result, ensure_ascii=False))
 
 
 if __name__ == '__main__':

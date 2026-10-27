@@ -151,9 +151,9 @@ class ConversationFiles:
                 # Unicode lowercase can expand one code point (e.g. U+0130).
                 # Translate the match offset back to the original redacted string.
                 consumed = 0
-                for index, char in enumerate(text):
+                for char_index, char in enumerate(text):
                     if consumed + len(char.lower()) > position:
-                        position = index
+                        position = char_index
                         break
                     consumed += len(char.lower())
             start = max(0, position - 250) if positions and len(text) > 1500 else 0
