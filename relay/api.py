@@ -166,6 +166,13 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
             body.extend(chunk)
         return conversation_files.upload(conversation_id, filename, request.headers.get('content-type'), bytes(body))
 
+    @app.get('/api/conversations/{conversation_id}/attachments/{attachment_id}/robot-report')
+    def inspect_conversation_report(conversation_id: str, attachment_id: str,
+                                    offset: int = Query(default=0, ge=0),
+                                    limit: int = Query(default=20, ge=1, le=50),
+                                    test_id: str | None = Query(default=None, max_length=10)):
+        return conversation_files.report(conversation_id, attachment_id, offset, limit, test_id)
+
     @app.delete('/api/conversations/{conversation_id}/attachments/{attachment_id}')
     def delete_conversation_attachment(conversation_id: str, attachment_id: str):
         return conversation_files.delete(conversation_id, attachment_id)
