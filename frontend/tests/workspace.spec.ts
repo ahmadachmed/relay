@@ -1148,3 +1148,25 @@ test("AI thinking appears during requests, clears on failure and returns for ret
   await expect(page.getByText("AI suggestion: Ready to help.",{exact:true})).toBeVisible();
   await expect(thinking).toHaveCount(0);
 });
+
+for (const width of [390, 1440]) test(`thinking stays above composer with long history at ${width}px`, async ({page}) => {
+  await fixtures(page);
+  await page.setViewportSize({width, height: width === 390 ? 844 : 1000});
+  await page.route('**/api/assistant', r => r.fulfill({json:{enabled:true,configured:true}}));
+  let release!: () => void;
+  await page.route('**/api/assistant/chat', async r => {
+    await new Promise<void>(resolve => { release = resolve; });
+    await r.fulfill({json:{answer:{action:'clarify',message:'Done',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[]}});
+  });
+  await page.addInitScript(() => localStorage.setItem('relay.ui.conversations-v1', JSON.stringify({planning:Array.from({length:25},(_,i)=>({id:String(i),role:'relay',text:`Message ${i} ${'long history '.repeat(25)}`}))})));
+  await page.goto('/ui/');
+  await expect(page.getByText(/Message 24/)).toBeVisible();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Analyze this');
+  await page.getByRole('button',{name:'Send command'}).click();
+  const thinking = page.getByRole('status').filter({hasText:'AI is thinking'});
+  await expect(thinking).toBeVisible();
+  const positions = await thinking.evaluate(el => ({bottom:el.getBoundingClientRect().bottom, composer:document.querySelector('.composer-wrap')!.getBoundingClientRect().top}));
+  expect(positions.bottom).toBeLessThanOrEqual(positions.composer);
+  release();
+  await expect(thinking).toHaveCount(0);
+});

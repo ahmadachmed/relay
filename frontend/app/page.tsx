@@ -205,7 +205,7 @@ export default function Workspace() {
   const thinkingRef = useRef<HTMLDivElement>(null);
   const showThinking = busy === "ai" && aiPendingConversation === conversationKey;
   useEffect(() => {
-    if (showThinking) thinkingRef.current?.scrollIntoView({ block: "nearest" });
+    if (showThinking) thinkingRef.current?.scrollIntoView({ block: "center" });
   }, [showThinking]);
   const [online, setOnline] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
