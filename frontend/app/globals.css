@@ -815,7 +815,8 @@ h1 em {
   box-shadow: 0 4px 18px #31351f05;
   padding: 8px;
 }
-.composer input {
+.composer input,
+.composer textarea {
   flex: 1;
   min-width: 0;
   border: 0;
@@ -823,10 +824,18 @@ h1 em {
   padding: 11px 9px;
   font-size: 12px;
   color: #657157;
+  resize: none;
+  max-height: 160px;
+  overflow-y: auto;
+  font: inherit;
 }
-.composer input::placeholder {
+.composer input::placeholder,
+.composer textarea::placeholder {
   color: #a4a995;
 }
+.composer-files { display:flex; flex-wrap:wrap; gap:5px; width:100%; }
+.composer-files > span { display:inline-flex; align-items:center; gap:4px; border:1px solid var(--line); border-radius:8px; padding:3px 7px; font-size:10px; }
+.composer { flex-wrap:wrap; }
 .composer button {
   background: var(--clay);
   color: #fff;
@@ -1895,10 +1904,12 @@ html[data-theme="dark"] .primary:hover:not(:disabled) {
 html[data-theme="dark"] :is(a, .text-button) {
   color: #f2b797;
 }
-html[data-theme="dark"] .composer input {
+html[data-theme="dark"] .composer input,
+html[data-theme="dark"] .composer textarea {
   color: var(--ink);
 }
-html[data-theme="dark"] .composer input::placeholder {
+html[data-theme="dark"] .composer input::placeholder,
+html[data-theme="dark"] .composer textarea::placeholder {
   color: #aab5c3;
 }
 html[data-theme="dark"] .composer-wrap {

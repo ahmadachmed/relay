@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   LoaderCircle,
   PanelRight,
+  Paperclip,
   Play,
   Plus,
   RefreshCw,
@@ -187,6 +188,42 @@ export default function Workspace() {
   const [conversations, setConversations] = useState<Record<string, Message[]>>({});
   const conversationKey = selected || "planning";
   const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
+  type ConversationFile = {id:string;filename:string;size:number;status:string};
+  const [attachmentScope,setAttachmentScope]=useState("");
+  const [scopeGeneration,setScopeGeneration]=useState(0);
+  const [attachmentMap,setAttachmentMap]=useState<Record<string,ConversationFile[]>>({});
+  const attachments=attachmentMap[attachmentScope] || [];
+  const [attachmentError,setAttachmentError]=useState("");
+  const [attachmentBusy,setAttachmentBusy]=useState(false);
+  const [uploadRetry,setUploadRetry]=useState<{scope:string;files:File[]}|null>(null);
+  const attachmentInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{
+    let live=true;setAttachmentScope("");setAttachmentError("");
+    async function load(){
+      try {
+        let scope=storage.get(`attachment-scope-${conversationKey}`);
+        let files:ConversationFile[]=[];
+        if(scope){try{files=await api<ConversationFile[]>(`/api/conversations/${scope}/attachments`);}catch(e){if(e instanceof ApiError && e.status===404 && e.code==="not_found")scope=null;else throw e;}}
+        if(!scope){const created=await api<{id:string}>("/api/conversations",{method:"POST"});scope=created.id;}
+        if(live){storage.set(`attachment-scope-${conversationKey}`,scope);setAttachmentMap(old=>({...old,[scope!]:files}));setAttachmentScope(scope);}
+      }catch(e){if(live)setAttachmentError(errorText(e));}
+    }
+    void load();return()=>{live=false;};
+  },[conversationKey,scopeGeneration]);
+  async function attachFiles(files:File[], scope=attachmentScope){
+    if(!files.length||!scope)return;
+    setAttachmentBusy(true);setAttachmentError("");setUploadRetry(null);
+    let index=0;
+    try {
+      for(;index<files.length;index++){
+        const file=files[index];
+        const item=await api<ConversationFile>(`/api/conversations/${scope}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});
+        setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).some(x=>x.id===item.id)?old[scope]:[...(old[scope]||[]),item]}));
+      }
+    } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
+    finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
+  }
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -732,6 +769,7 @@ export default function Workspace() {
   }
   function sendCommand(event: React.FormEvent) {
     event.preventDefault();
+    if (busy || attachmentBusy || aiLock.current || actionLock.current || previewLock.current) return;
     const text = command.trim();
     if (!text) return;
     setCommand("");
@@ -788,6 +826,8 @@ export default function Workspace() {
           disabled={Boolean(busy)}
           onClick={() => {
             setAiError(null);
+            storage.set("attachment-scope-planning", "");
+            setScopeGeneration(old=>old+1);
             setSelected("");
             storage.set("selected", "");
             setRun(null);
@@ -1508,14 +1548,20 @@ export default function Workspace() {
         <div className="composer-wrap">
 
           <form className="composer" onSubmit={sendCommand}>
+            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified, not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>{if(uploadRetry?.scope===attachmentScope)void attachFiles(uploadRetry.files,uploadRetry.scope);else setScopeGeneration(old=>old+1);}}>Retry</button></span>}</div>
+            <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(Array.from(e.target.files||[]))}/>
+            <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy||!attachmentScope} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">
               Structured command
             </label>
-            <input
+            <textarea
               id="command"
+              rows={1}
               value={command}
+              onInput={e=>{const el=e.currentTarget;el.style.height="auto";el.style.height=`${Math.min(el.scrollHeight,160)}px`;}}
+              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();e.currentTarget.form?.requestSubmit();}}}
               onChange={(e) => setCommand(e.target.value)}
-              maxLength={500}
+              maxLength={4000}
               placeholder={
                 aiEnabled && shareAi
                   ? "Ask about your tests or suggest a check…"

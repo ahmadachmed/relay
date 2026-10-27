@@ -17,6 +17,7 @@ from .evidence import EvidenceStore
 from .source_context import SourceContext
 from .knowledge_proposals import DraftEdit, Approval, RollbackDraft, ProposalReference
 from .report_evidence import MAX_REPORT_BYTES
+from .conversation_files import ConversationFiles
 from uuid import UUID
 from pydantic import model_validator
 from .providers import ProviderError
@@ -32,6 +33,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     execution = ExecutionService(runner.data / 'remote.sqlite3', registry)
     monitor = RunMonitor(execution)
     evidence_store = EvidenceStore(execution, monitor)
+    conversation_files = ConversationFiles(execution)
     assistant = Assistant(registry, monitor, evidence_store)
     source_context = SourceContext(execution, monitor, registry)
 
@@ -146,6 +148,27 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     @app.post('/api/assistant/chat')
     async def assistant_chat(body: ChatRequest):
         return await assistant.chat(body)
+
+    @app.post('/api/conversations')
+    def create_conversation():
+        return conversation_files.create()
+
+    @app.get('/api/conversations/{conversation_id}/attachments')
+    def list_conversation_attachments(conversation_id: str):
+        return conversation_files.list(conversation_id)
+
+    @app.post('/api/conversations/{conversation_id}/attachments')
+    async def upload_conversation_attachment(conversation_id: str, request: Request, filename: str = Query(min_length=1, max_length=300)):
+        body = bytearray()
+        async for chunk in request.stream():
+            if len(body) + len(chunk) > MAX_REPORT_BYTES:
+                raise HTTPException(413, 'Attachment exceeds 10 MB')
+            body.extend(chunk)
+        return conversation_files.upload(conversation_id, filename, request.headers.get('content-type'), bytes(body))
+
+    @app.delete('/api/conversations/{conversation_id}/attachments/{attachment_id}')
+    def delete_conversation_attachment(conversation_id: str, attachment_id: str):
+        return conversation_files.delete(conversation_id, attachment_id)
 
     class SourcePreview(Contract):
         path: str = Field(min_length=1, max_length=300)
