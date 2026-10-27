@@ -1244,3 +1244,33 @@ for (const removeSelected of [true, false]) test(`removing ${removeSelected ? 't
   expect(requests[0].report_attachment).toEqual(removeSelected ? null : {conversation_id:scope,attachment_id:attachment,sha256:hash,test_id:'24',offset:0,share:true});
   await expect(page.getByRole('region',{name:'AI suggestion',exact:true})).toBeVisible();
 });
+
+for (const width of [390, 1440]) test(`automatic report search needs explicit one-message approval at ${width}px`, async ({page}) => {
+  await page.setViewportSize({width, height:900});
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), hash='e'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:25,offset:0,next_offset:20,items:[{id:'0',name:'Failed login',status:'FAIL'}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{
+    requests.push(r.request().postDataJSON());
+    return r.fulfill({json:{answer:{action:'answer',message:'Review failure.',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[],auto_report:requests.at(-1).auto_report ? {total_tests:30,total_failures:25,listed_failures:20,tests_with_sections_shared:1,offset:0,next_offset:20,budget_diagnostics:['Optional knowledge omitted to fit report context budget.'],coverage:'Partial coverage.'} : null}});
+  });
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByRole('checkbox',{name:/Let AI search this report/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate failures');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true});
+  expect(requests[0].report_attachment).toBeNull();
+  await expect(page.getByLabel('Automatic report search')).toContainText('Some failures were not listed');
+  await expect(page.getByLabel('Automatic report search')).toContainText('Optional knowledge omitted');
+  await expect(page.getByRole('checkbox',{name:/Let AI search this report/})).not.toBeChecked();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(2);
+  expect(requests[1].auto_report).toBeNull();
+});

@@ -1994,3 +1994,12 @@ html[data-theme="dark"] .message.user .message-avatar {
 .analysis-context {padding: 12px; font-size: 12px;}
 .analysis-context label {display: block; margin-top: 10px;}
 .analysis-context textarea {display: block; width: 100%; min-height: 90px; resize: vertical; color: inherit; background: var(--paper); border: 1px solid var(--line); white-space: pre-wrap; overflow-wrap: anywhere;}
+
+/* Keep conversation actions above the measured fixed composer at every viewport. */
+.main:has(.composer-wrap) {
+  padding-bottom: max(240px, calc(var(--relay-composer-height, 240px) + 32px));
+}
+.report-search-controls {
+  max-height: min(35vh, 220px);
+  overflow: auto;
+}

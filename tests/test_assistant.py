@@ -687,3 +687,244 @@ def test_continuation_is_discarded_if_redaction_changes_during_model_call(harnes
     app.state.assistant.provider = ChangeRedaction()
     continuation = {**ref,'section_id':'0','text_offset':first['next_text_offset'],'text_sha256':first['text_sha256']}
     assert post(client, report_attachment=continuation).status_code == 409
+
+
+def test_automatic_report_search_reads_only_discovered_failed_test(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite>' + ''.join(f'<test name="case{i}"><msg>failure {i}</msg><status status="FAIL"/></test>' for i in range(25)) + '</suite></robot>').encode()
+    attachment = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':attachment['id'], 'sha256':attachment['sha256'], 'share':True}
+    class SearchProvider:
+        def __init__(self): self.calls=[]
+        async def answer(self, context):
+            self.calls.append(context.copy())
+            if len(self.calls) == 1:
+                assert len(context['auto_report']['failures']) == 20
+                return answer(action='answer', report_operations=[{'operation':'list_failures','test_id':None,'offset':20}])
+            if len(self.calls) == 2:
+                assert context['auto_report']['failures'][-1]['id'] == '24'
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'24','offset':0}])
+            assert context['report_attachment']['test_id'] == '24'
+            return answer(action='answer', message='Failure 24', report_citations=[{'section_id':'0','claim':'Observed failure'}])
+    fake = SearchProvider(); app.state.assistant.provider = fake
+    result = post(client, auto_report=ref)
+    assert result.status_code == 200, result.text
+    assert len(fake.calls) == 3
+    assert result.json()['report_shared']['test_id'] == '24'
+    assert result.json()['report_shared']['items'][0]['text'] == 'failure 24'
+    assert result.json()['auto_report']['total_failures'] == 25
+    assert result.json()['auto_report']['listed_failures'] == 25
+    assert result.json()['auto_report']['tests_with_sections_shared'] == 1
+    assert [step['operation'] for step in result.json()['auto_report']['trace']] == ['list_failures', 'list_failures', 'read_test']
+    assert post(client, auto_report={**ref, 'share':False}).status_code == 422
+    assert post(client, auto_report=ref, include_source_context=True).status_code == 422
+    other = client.post('/api/conversations').json()['id']
+    assert post(client, auto_report={**ref,'conversation_id':other}).status_code == 404
+    assert post(client, auto_report={**ref,'sha256':'0'*64}).status_code == 409
+
+
+def test_report_operations_are_bounded_and_require_approval(harness):
+    app, client, fake = harness
+    fake.result = answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+    assert post(client).status_code == 502
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="pass"><status status="PASS"/></test><test name="fail"><status status="FAIL"/></test></suite></robot>'
+    attachment = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':attachment['id'],'sha256':attachment['sha256'],'share':True}
+    assert post(client, auto_report=ref).status_code == 502 # test 0 was not in the failure list
+    fake.result = answer(action='answer', report_operations=[{'operation':'list_failures','test_id':None,'offset':0}])
+    assert post(client, auto_report=ref).status_code == 422 # bounded rounds, no fabricated answer
+
+
+def test_auto_report_deletion_during_model_call_stops_retrieval(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="failure"><msg>details</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class DeletingProvider:
+        async def answer(self, context):
+            app.state.assistant.conversation_files.delete(scope, item['id'])
+            return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+    app.state.assistant.provider = DeletingProvider()
+    assert post(client, auto_report=ref).status_code == 404
+
+
+def test_auto_report_model_sees_redacted_data_only(harness, monkeypatch):
+    app, client, fake = harness
+    monkeypatch.setenv('RELAY_TEST_SECRET', 'secretvalue987654321')
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="secretvalue987654321"><msg>secretvalue987654321</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Reader:
+        def __init__(self): self.calls=[]
+        async def answer(self, context):
+            self.calls.append(json.dumps(context))
+            if len(self.calls)==1:
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            return answer(action='answer')
+    reader=Reader(); app.state.assistant.provider=reader
+    assert post(client, auto_report=ref).status_code == 200
+    assert all('secretvalue987654321' not in call for call in reader.calls)
+    assert '[REDACTED]' in reader.calls[-1]
+
+
+def test_auto_report_discards_answer_if_redaction_changes(harness, monkeypatch):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="failure"><msg>private-example-secret</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class ChangeRedaction:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            monkeypatch.setenv('RELAY_NEW_SECRET','private-example-secret')
+            return answer(action='answer')
+    app.state.assistant.provider = ChangeRedaction()
+    assert post(client, auto_report=ref).status_code == 409
+
+
+@pytest.mark.parametrize('mode', ['json_schema', 'json_object'])
+def test_auto_report_search_through_chat_gateway_transport(harness, monkeypatch, mode):
+    app, client, _ = harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL', 'http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_API', 'chat_completions')
+    monkeypatch.setenv('RELAY_AI_OUTPUT_FORMAT', mode)
+    monkeypatch.setenv('RELAY_AI_MODEL', 'fake-model')
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="failure"><msg>gateway failure</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    seen = []
+    def handle(request):
+        payload = json.loads(request.content)
+        context = json.loads(payload['messages'][-1]['content'])
+        seen.append(context)
+        if len(seen) == 1:
+            result = answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+        else:
+            result = answer(action='answer', report_citations=[{'section_id':'0','claim':'Observed gateway failure.'}])
+        return httpx.Response(200, json={'choices':[{'finish_reason':'stop','message':{'content':json.dumps(result.model_dump())}}]})
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, 'AsyncClient', lambda **kwargs: original(transport=httpx.MockTransport(handle), **kwargs))
+    app.state.assistant.provider = OpenAIProvider()
+    response = post(client, auto_report=ref)
+    assert response.status_code == 200, response.text
+    assert len(seen) == 2 and seen[-1]['report_attachment']['items'][0]['text'] == 'gateway failure'
+    assert response.json()['answer']['report_citations'][0]['section_id'] == '0'
+
+
+def test_auto_report_rejects_citation_to_unshared_section(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    item = client.post(path, params={'filename':'output.xml'}, content=b'<robot><suite><test name="failure"><msg>detail</msg><status status="FAIL"/></test></suite></robot>').json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class InvalidCitation:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            return answer(action='answer', report_citations=[{'section_id':'999','claim':'Invented.'}])
+    app.state.assistant.provider = InvalidCitation()
+    assert post(client, auto_report=ref).status_code == 502
+
+
+def test_auto_report_prioritizes_unicode_test_details_and_keeps_scope(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite>' + ''.join('<test name="' + '漢'*300 + '"><msg>' + '漢'*2000 + '</msg><status status="FAIL"/></test>' for _ in range(20)) + '</suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'share':True}
+    class Reader:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                assert len(context['auto_report']['failures']) == 20
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['auto_report']['failure_names_omitted'] is True
+            assert context['auto_report']['failures'] == []
+            assert context['report_attachment']['items'][0]['text'] == '漢'*2000
+            return answer(action='answer', report_citations=[{'section_id':'0','claim':'Shared detail.'}])
+    app.state.assistant.provider = Reader()
+    response = post(client, auto_report=ref)
+    assert response.status_code == 200, response.text
+    assert response.json()['answer']['report_citations'][0]['section_id'] == '0'
+    assert response.json()['auto_report']['listed_failures'] == 20
+    assert response.json()['report_shared']['items'][0]['section_id'] == '0'
+
+
+def test_auto_report_rechecks_omitted_failure_names_for_redaction_changes(harness, monkeypatch):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="private-example-secret"><msg>detail</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'share':True}
+    class Reader:
+        def __init__(self): self.calls = 0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['auto_report']['failures'] == []
+            monkeypatch.setenv('RELAY_NEW_SECRET','private-example-secret')
+            return answer(action='answer')
+    app.state.assistant.provider = Reader()
+    assert post(client, auto_report=ref).status_code == 409
+
+
+def test_auto_report_omits_optional_knowledge_before_failure_discovery(harness, monkeypatch):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    monkeypatch.setattr('relay.assistant.load_knowledge', lambda *args: {'sources':[{'document_id':'overview','text':'a'*8000,'id':'doc'}], 'diagnostics':[]})
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    item = client.post(path, params={'filename':'output.xml'}, content=b'<robot><suite><test name="failure"><msg>detail</msg><status status="FAIL"/></test></suite></robot>').json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    result = post(client, run_id=RUN, history=[{'role':'user','text':'x'*4000} for _ in range(6)], analysis_context={'test_code':'y'*6000,'expected_behavior':'z'*3000}, auto_report=ref, include_automation_knowledge=True)
+    assert result.status_code == 200, result.text
+    assert fake.calls[-1]['auto_report']['failures'][0]['name'] == 'failure'
+    assert fake.calls[-1]['project_knowledge'] is None
+    assert 'omitted' in result.json()['auto_report']['budget_diagnostics'][0]
+    assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+
+
+def test_auto_report_omits_optional_knowledge_for_selected_detail(harness, monkeypatch):
+    app, client, _ = harness
+    evidence(app, monkeypatch)
+    monkeypatch.setattr('relay.assistant.load_knowledge', lambda *args: {'sources':[{'document_id':'overview','text':'a'*8000,'id':'doc'}], 'diagnostics':[]})
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="failure"><msg>' + '漢'*2000 + '</msg><status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Reader:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                assert context['project_knowledge']['sources']
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['project_knowledge'] is None
+            assert context['report_attachment']['items'][0]['text'] == '漢'*2000
+            return answer(action='answer')
+    app.state.assistant.provider = Reader()
+    result = post(client, run_id=RUN, history=[{'role':'user','text':'x'*4000} for _ in range(4)], analysis_context={'test_code':'y'*6000,'expected_behavior':'z'*3000}, auto_report=ref, include_automation_knowledge=True)
+    assert result.status_code == 200, result.text
+    assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+    assert result.json()['report_shared']['items']
