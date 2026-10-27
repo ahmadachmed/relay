@@ -94,3 +94,12 @@ class ConversationFiles:
         if not result.rowcount:
             raise PlanError("not_found", "Attachment not found in this conversation", 404)
         return {"deleted": True}
+
+    def report(self, conversation_id, attachment_id, offset=0, limit=20, test_id=None):
+        from .report_sections import inspect_robot
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            row = db.execute("SELECT body,sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?", (conversation_id, attachment_id, time.time() - RETENTION)).fetchone()
+        if not row:
+            raise PlanError("not_found", "Attachment not found in this conversation", 404)
+        return dict(inspect_robot(row[0], row[1], offset, limit, test_id), attachment_id=attachment_id)
