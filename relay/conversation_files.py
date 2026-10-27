@@ -140,8 +140,17 @@ class ConversationFiles:
         # Redact complete text before selecting/truncating to avoid leaking secret fragments.
         words = {w.lower() for w in re.findall(r'\w{3,}', query, flags=re.UNICODE)[:32]}
         sections = []
-        for index, part in enumerate(data['sections']):
-            text = sanitize(part['text'])
+        # PEM blocks can span lines, paragraphs or pages. Redact every affected
+        # section before ranking, so no fragment can reach the model alone.
+        parts = data['sections']
+        joined = '\n'.join(part['text'] for part in parts)
+        spans = [m.span() for m in re.finditer(r'-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----', joined)]
+        position_in_document = 0
+        for index, part in enumerate(parts):
+            end = position_in_document + len(part['text'])
+            sensitive = any(start < end and stop > position_in_document for start, stop in spans)
+            text = '[REDACTED]' if sensitive else sanitize(part['text'])
+            position_in_document = end + 1
             lowered = text.lower()
             terms = set(re.findall(r'\w{3,}', lowered, flags=re.UNICODE))
             matched = words & terms

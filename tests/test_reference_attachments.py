@@ -237,3 +237,21 @@ def test_large_unicode_reference_within_limits(setup):
     result=ask(c,reference_attachment=ref(scope,item))
     assert result.status_code==200, result.text
     assert result.json()['reference_shared']['sections'][0]['truncated']
+
+
+def test_multiline_private_key_redacted_before_sharing(setup):
+    app,c,scope,fake=setup
+    body=b'-----BEGIN PRIVATE KEY-----\nSYNTHETIC_PRIVATE_KEY_PAYLOAD_FOR_REVIEW\n-----END PRIVATE KEY-----'
+    item=upload(c,scope,'key.txt',body)
+    result=ask(c,reference_attachment=ref(scope,item))
+    assert result.status_code==200, result.text
+    assert 'SYNTHETIC_PRIVATE_KEY_PAYLOAD_FOR_REVIEW' not in json.dumps(fake.calls[-1])
+    assert 'SYNTHETIC_PRIVATE_KEY_PAYLOAD_FOR_REVIEW' not in result.text
+
+
+def test_multiple_unicode_sections_fit_utf8_budget(setup):
+    app,c,scope,fake=setup
+    item=upload(c,scope,'unicode.txt',(('😀'*1500+'\n')*3).encode())
+    result=ask(c,reference_attachment=ref(scope,item))
+    assert result.status_code==200, result.text
+    assert len(result.json()['reference_shared']['sections'])==3

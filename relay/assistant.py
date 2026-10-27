@@ -525,6 +525,9 @@ class Assistant:
                 # Redact free text, preserving opaque IDs and the original hash for provenance.
                 report_shared = {**report, 'test_id': ref.test_id}
                 context['report_attachment'] = report_shared
+            def context_size():
+                return len(encoded(context)) if request.reference_attachment else len(json.dumps(context).encode())
+
             # Optional knowledge never crowds out the base report/chat context.
             bundles = [context.get('project_knowledge'), context.get('sut_knowledge')]
             candidates = []
@@ -539,7 +542,7 @@ class Assistant:
             for bundle, source in candidates:
                 size = len(json.dumps(source).encode())
                 bundle['sources'].append(source)
-                if used + size > 20_000 or len(json.dumps(context).encode()) + sum(len(json.dumps({k:v for k,v in doc.items() if k != 'text'}).encode()) for candidate in bundles if candidate for doc in candidate['sources']) > 46_000:
+                if used + size > 20_000 or context_size() + sum(len(json.dumps({k:v for k,v in doc.items() if k != 'text'}).encode()) for candidate in bundles if candidate for doc in candidate['sources']) > 46_000:
                     bundle['sources'].pop()
                     if 'Knowledge documents omitted to fit input budget.' not in bundle['diagnostics']:
                         bundle['diagnostics'].append('Knowledge documents omitted to fit input budget.')
@@ -549,7 +552,7 @@ class Assistant:
                 for key, bundle in [('knowledge', context.get('project_knowledge')), ('sut_knowledge', context.get('sut_knowledge'))]:
                     facts[key] = {'sources': [{k:v for k,v in source.items() if k != 'text'} for source in bundle['sources']], 'diagnostics': bundle['diagnostics']} if bundle else None
                 context['selected_run'] = redact(facts)
-            if len(json.dumps(context).encode()) > 48_000 and any(bundles):
+            if context_size() > 48_000 and any(bundles):
                 # Knowledge diagnostics remain available locally even when no
                 # optional bundle/provenance fits in the model input.
                 context['project_knowledge'] = None
@@ -563,16 +566,16 @@ class Assistant:
             if report_shared:
                 # Reserve room for source metadata and the final JSON framing. Drop
                 # only complete records; citations may refer solely to retained IDs.
-                while report_shared['items'] and len(json.dumps(context).encode()) > 44_000:
+                while report_shared['items'] and context_size() > 44_000:
                     report_shared['items'].pop()
                 consumed = report_shared['offset'] + len(report_shared['items'])
                 report_shared['next_offset'] = consumed if consumed < report_shared['total'] else None
                 if not report_shared['items'] and report_shared['offset'] < report_shared['total']:
                     raise PlanError('ai_context_limit', 'No report section fits the remaining AI input budget. Reduce other context.', 413)
-            if len(json.dumps(context).encode()) > 48_000:
+            if context_size() > 48_000:
                 raise PlanError('ai_context_limit', 'Context exceeds the AI input budget. Reduce the added context, configured catalog or message.', 413)
             def make_room_for_report():
-                if len(json.dumps(context).encode()) <= 44000:
+                if context_size() <= 44000:
                     return
                 omitted = False
                 for context_key, fact_key in [('project_knowledge', 'knowledge'), ('sut_knowledge', 'sut_knowledge')]:
@@ -600,7 +603,7 @@ class Assistant:
                                 'coverage': 'Partial report only. Only the latest test detail page is shown and citable; earlier detail pages are not retained.', 'tests_with_sections_shared': 0}
                 context['auto_report'] = auto_summary
                 make_room_for_report()
-                while auto_summary['failures'] and len(json.dumps(context).encode()) > 44000:
+                while auto_summary['failures'] and context_size() > 44000:
                     auto_summary['failures'].pop()
                 consumed = auto_summary['offset'] + len(auto_summary['failures'])
                 auto_summary['next_offset'] = consumed if consumed < auto_summary['total_failures'] else None
@@ -705,7 +708,7 @@ class Assistant:
                                 report_shared = None
                                 context.pop('report_attachment', None)
                                 make_room_for_report()
-                                while auto_summary['failures'] and len(json.dumps(context).encode()) > 44000:
+                                while auto_summary['failures'] and context_size() > 44000:
                                     auto_summary['failures'].pop()
                                 consumed = auto_summary['offset'] + len(auto_summary['failures'])
                                 auto_summary['next_offset'] = consumed if consumed < auto_summary['total_failures'] else None
@@ -727,7 +730,7 @@ class Assistant:
                                 report_shared = {**page, 'test_id': operation.test_id}
                                 context['report_attachment'] = report_shared
                                 make_room_for_report()
-                                while report_shared['items'] and len(json.dumps(context).encode()) > 44000:
+                                while report_shared['items'] and context_size() > 44000:
                                     report_shared['items'].pop()
                                 consumed = report_shared['offset'] + len(report_shared['items'])
                                 report_shared['next_offset'] = consumed if consumed < report_shared['total'] else None
