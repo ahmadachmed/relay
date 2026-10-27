@@ -526,6 +526,7 @@ class Assistant:
             auto_seen = set()
             auto_read = set()
             auto_summary = None
+            auto_page_snapshot = []
             if request.auto_report:
                 ref = request.auto_report
                 page = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id, 0, 20, None, redact)
@@ -542,6 +543,8 @@ class Assistant:
                 if not auto_summary['failures'] and auto_summary['offset'] < auto_summary['total_failures']:
                     raise PlanError('ai_context_limit', 'No failure fits the remaining AI input budget.', 413)
                 auto_seen.update(item['id'] for item in auto_summary['failures'])
+                auto_page_snapshot = deepcopy(auto_summary['failures'])
+                auto_summary['failure_names_omitted'] = False
                 auto_summary['listed_failures'] = len(auto_seen)
                 auto_summary['trace'] = [{'operation':'list_failures', 'offset':0, 'count':len(auto_summary['failures']), 'test_id':None}]
             async def verify_auto_report():
@@ -552,8 +555,8 @@ class Assistant:
                                                auto_summary['offset'], 20, None, redact)
                 if page['sha256'] != ref.sha256:
                     raise PlanError('attachment_changed', 'The selected attachment changed.', 409)
-                count = len(auto_summary['failures'])
-                if page['total'] != auto_summary['total_failures'] or page['total_tests'] != auto_summary['total_tests'] or page['items'][:count] != auto_summary['failures']:
+                count = len(auto_page_snapshot)
+                if page['total'] != auto_summary['total_failures'] or page['total_tests'] != auto_summary['total_tests'] or page['items'][:count] != auto_page_snapshot:
                     raise PlanError('report_redaction_changed', 'Report redaction changed. Retry with fresh approval.', 409)
                 if report_shared:
                     detail = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id,
@@ -642,12 +645,18 @@ class Assistant:
                                 if not auto_summary['failures'] and auto_summary['offset'] < auto_summary['total_failures']:
                                     raise PlanError('ai_context_limit', 'No failure fits the remaining AI input budget.', 413)
                                 auto_seen.update(item['id'] for item in auto_summary['failures'])
+                                auto_page_snapshot = deepcopy(auto_summary['failures'])
+                                auto_summary['failure_names_omitted'] = False
                                 auto_summary['listed_failures'] = len(auto_seen)
                                 auto_summary['trace'].append({'operation':'list_failures', 'offset':operation.offset, 'count':len(auto_summary['failures']), 'test_id':None})
                             elif operation.operation == 'read_test' and operation.test_id in auto_seen:
                                 page = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id, operation.offset, 20, operation.test_id, redact)
                                 if page['sha256'] != ref.sha256:
                                     raise PlanError('attachment_changed', 'The selected attachment changed.', 409)
+                                # Previously discovered names remain server-side for authorization
+                                # and freshness checks; prioritize the requested evidence in model input.
+                                auto_summary['failures'] = []
+                                auto_summary['failure_names_omitted'] = True
                                 report_shared = {**page, 'test_id': operation.test_id}
                                 context['report_attachment'] = report_shared
                                 while report_shared['items'] and len(json.dumps(context).encode()) > 44000:

@@ -840,3 +840,49 @@ def test_auto_report_rejects_citation_to_unshared_section(harness):
             return answer(action='answer', report_citations=[{'section_id':'999','claim':'Invented.'}])
     app.state.assistant.provider = InvalidCitation()
     assert post(client, auto_report=ref).status_code == 502
+
+
+def test_auto_report_prioritizes_unicode_test_details_and_keeps_scope(harness):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite>' + ''.join('<test name="' + '漢'*300 + '"><msg>' + '漢'*2000 + '</msg><status status="FAIL"/></test>' for _ in range(20)) + '</suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'share':True}
+    class Reader:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                assert len(context['auto_report']['failures']) == 20
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['auto_report']['failure_names_omitted'] is True
+            assert context['auto_report']['failures'] == []
+            assert context['report_attachment']['items'][0]['text'] == '漢'*2000
+            return answer(action='answer', report_citations=[{'section_id':'0','claim':'Shared detail.'}])
+    app.state.assistant.provider = Reader()
+    response = post(client, auto_report=ref)
+    assert response.status_code == 200, response.text
+    assert response.json()['answer']['report_citations'][0]['section_id'] == '0'
+    assert response.json()['auto_report']['listed_failures'] == 20
+    assert response.json()['report_shared']['items'][0]['section_id'] == '0'
+
+
+def test_auto_report_rechecks_omitted_failure_names_for_redaction_changes(harness, monkeypatch):
+    app, client, _ = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="private-example-secret"><msg>detail</msg><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'share':True}
+    class Reader:
+        def __init__(self): self.calls = 0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['auto_report']['failures'] == []
+            monkeypatch.setenv('RELAY_NEW_SECRET','private-example-secret')
+            return answer(action='answer')
+    app.state.assistant.provider = Reader()
+    assert post(client, auto_report=ref).status_code == 409

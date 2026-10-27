@@ -62,7 +62,9 @@ An uploaded report is not proof that a saved pipeline ran it.
 A maximum of four model rounds, 20 failures or test sections per page, a cumulative
 model-input budget and the existing request deadline bound work. Report coverage is
 partial: the UI counts distinct failure names listed to the model, not tests fully
-investigated. When bounds prevent an answer, Relay reports an error and asks for a
+investigated. Once the model requests test details, previously listed names are
+removed from its next context to reserve budget; their IDs and redacted snapshot
+remain server-side for authorization and freshness checks. When bounds prevent an answer, Relay reports an error and asks for a
 narrower request. Long records still require manual continuation. A model can select
 only failures previously listed in the same request, not arbitrary paths, files or
 other conversations. Every read checks the attachment scope and hash. The answer is
