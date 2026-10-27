@@ -19,9 +19,9 @@ this is not a reconstructed keyword tree. Suite setup/teardown outside tests is
 not returned. Reports without tests return zero rather than a passing verdict.
 Deletion/expiry removes access. No derived content is persisted.
 
-Remaining #45 work includes suite-level evidence, structured hierarchy/search,
-shared saved-run retrieval, document extraction, AI tools/citations, task approval
-continuation and frontend inspection. This slice does not complete #45 or M1.
+Suite-level evidence, report search, saved-run retrieval and guided task approval
+are described below. Keyword hierarchy, complete report coverage and operator
+acceptance remain incomplete; this does not complete #45 or M1.
 
 ## Share one test with AI (initial slice)
 
@@ -43,10 +43,9 @@ that flow. Report text and names are redacted before truncation. Records may be 
 For a long record, choose “Use next part” and approve sharing again. The continuation
 is bound to the same attachment, test, section and SHA-256 of the complete redacted
 text; changed redaction invalidates the continuation. Character offsets count Unicode
-code points in the redacted text, not bytes or positions in the original. Suite-level setup/teardown and
-unread records remain absent. Model-chosen retrieval, task-scoped resumable approval,
-semantic verification of citations, automatic full-report retrieval, and other attachment
-formats are future #45 work. This feature does not complete M1.
+code points in the redacted text, not bytes or positions in the original. Suite-level setup/teardown and unread records are not included in this manual test
+selection. Automatic discovery and guided task approval are described below.
+Citation membership does not verify semantic accuracy or complete report coverage.
 
 ## Report search and automatic discovery (bounded)
 
@@ -72,9 +71,11 @@ asserted rather than provider-verified.
 Automatic discovery may be combined with separately approved original-source
 sharing; source configuration, identities, model-round and input limits still
 apply. A source-enabled request uses at most the configured source model rounds
-(default three), so a complex investigation may require a narrower request.
+(default three; configurable up to twelve), so a complex investigation may require a narrower request.
 Manual report selection and automatic discovery remain mutually exclusive.
-Only the latest test detail page is retained for report citation. Search does not
+Ordinary report citations apply to the latest test detail. Up to four earlier test or
+suite pages, with at most five sections each, may be retained and cited using
+separate history handles; omitted pages and sections are disclosed. Search does not
 establish report completeness, deployed behavior, flaky status or root cause.
 Redaction is best effort and uploaded reports are not verified pipeline evidence.
 With explicit `include_suites: true` consent, the model can list suites and read
@@ -83,8 +84,8 @@ separately from test citations. Suite status may reflect a parent failure and mu
 not be treated as independent proof of every child failure. Existing API requests
 without this consent cannot send suite content. For long test sections the model can request the offered next text offset within
 the same request; Relay rechecks the redacted text hash before sharing. Only the
-latest detail or continuation is citable. Task-scoped approval, resumable tasks
-and broader coverage remain follow-up work under #45.
+latest detail or continuation uses ordinary report citations; retained earlier
+evidence uses separate history citations. Broader coverage remains follow-up work under #45.
 
 ## Compare two uploaded reports
 
@@ -121,7 +122,9 @@ results are discarded when access is revoked during model execution.
 Pending tasks can be retrieved after refresh. Approval is claimed atomically and
 repeated approval does not run the task twice. If an in-flight task is interrupted,
 its lease expires and the operator must create and approve a new task; it is never
-automatically replayed. Approval expires after 15 minutes. Task messages, decisions
+automatically replayed. Approval expires after 15 minutes. Guided report capabilities request up to eight model
+rounds, 300,000 serialized input bytes and 120 seconds; the card displays these limits.
+Configured source limits can reduce them. Task messages, decisions
 and redacted results are kept in the local SQLite database (restricted to owner access)
 for up to seven days after expiration, with lazy cleanup. This is a local single-user
 workflow, not multi-tenant authorization.
@@ -130,3 +133,14 @@ Original sources must be registered and eligible for the selected project, SUT a
 explicit environment. Saved-run report associations are operator-asserted. The model
 sees only bounded candidate metadata during planning and cannot access arbitrary
 paths, execute pipelines, change files or grant itself permissions.
+
+For two saved-run Robot artifacts, comparison also checks recorded project,
+repository, framework, pipeline, SUT, branch, commit, environment and parameter
+sets. Differences or missing fields are disclosed without exposing parameter
+values. Trigger-attempt order is shown separately and does not verify report
+chronology. A `suspected_flaky` classification is permitted only for a cited
+PASS/FAIL pair across two distinct runs with matching recorded metadata and a
+cited shared failure detail from the selected run. Even then, manually uploaded
+report association is operator-asserted, retry/attempt history is unverified and
+the result remains a hypothesis requiring operator verification. A single failure
+or incompatible/unknown metadata cannot support that classification.

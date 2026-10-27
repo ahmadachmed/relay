@@ -1189,3 +1189,46 @@ def test_retained_history_redaction_change_discards_answer(harness,monkeypatch):
             return answer(action='answer')
     app.state.assistant.provider=Provider()
     assert post(client,auto_report=ref).status_code==409
+
+
+def test_explicit_extended_report_budget_allows_more_than_four_rounds(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=('<robot><suite name="Root">'+''.join(f'<test name="case{i}"><msg>failure {i}</msg><status status="FAIL"/></test>' for i in range(5))+'</suite></robot>').encode()
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True,'max_rounds':8,'max_input_bytes':300000,'max_wall_seconds':120}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls<=5:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':str(self.calls-1),'offset':0}])
+            assert len(context['evidence_history']['pages'])==4
+            return answer(action='answer',report_citations=[{'section_id':'0','claim':'Last failure'}])
+    provider=Provider();app.state.assistant.provider=provider
+    response=post(client,auto_report=ref)
+    assert response.status_code==200,response.text
+    assert provider.calls==6 and len(response.json()['evidence_history']['pages'])==4
+
+
+def test_planning_can_classify_cited_uploaded_failure_but_not_unshared_evidence(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><test name="fail"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            return answer(action='answer',classification={'category':'suspected_product_bug','reason':'HTTP 500','artifact_ids':[],'verification':'Check service logs'},report_citations=[{'section_id':'0','claim':'HTTP 500'}])
+    app.state.assistant.provider=Provider()
+    response=post(client,auto_report=ref)
+    assert response.status_code==200,response.text
+    assert response.json()['answer']['classification']['category']=='suspected_product_bug'
+    assert response.json()['report_shared']['scope']=='operator_uploaded'
+    class Invalid:
+        async def answer(self,context):
+            return answer(action='answer',classification={'category':'suspected_product_bug','reason':'No evidence','artifact_ids':[],'verification':'Check'})
+    app.state.assistant.provider=Invalid()
+    assert post(client).status_code==502

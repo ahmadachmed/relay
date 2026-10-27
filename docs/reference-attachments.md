@@ -40,7 +40,9 @@ the frontend, start the backend on loopback, then attach synthetic report and do
 fixtures. Review the displayed sharing and coverage before asking the model. Do not
 publish private test reports or TRDs in the repository or public issue.
 
-Automatic report discovery has a 110,000-byte cumulative serialized model-input
-budget across rounds, with a 64,000-byte per-call limit. When source retrieval is
-also enabled, the configured source cumulative budget and model-round limit apply. This accommodates the
-additional citation schema; budgets measure serialized input rather than tokens.
+Automatic report discovery defaults to 130,000 cumulative serialized model-input
+bytes and four model rounds. The UI and guided approval request up to 300,000 bytes,
+eight rounds and 120 seconds; the exact scope is shown before sharing. A 64,000-byte
+per-call limit always applies. When source retrieval is enabled, its configured
+cumulative, round and time limits may be lower. Bytes measure serialized input,
+not tokens.

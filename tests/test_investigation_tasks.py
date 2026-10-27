@@ -251,3 +251,12 @@ def test_task_can_approve_two_related_saved_run_reports_and_detect_stale_run(tmp
         response=client.post(f"/api/conversations/{scope}/tasks/{task['id']}/approve",json={'approval_hash':pending['approval_hash']})
         assert response.status_code==409
         assert len(provider.calls)==3
+
+
+def test_tampered_attachment_bytes_invalidate_task_before_model(harness):
+    app,client,scope,item,_=harness;provider=Provider(item);app.state.assistant.provider=provider
+    task=start(client,scope);pending=plan(client,scope,task)
+    with app.state.execution.connect() as db:
+        db.execute('UPDATE conversation_files SET body=? WHERE id=?',(b'<robot><suite><test name="tampered"/></suite></robot>',item['id']))
+    result=client.post(f"/api/conversations/{scope}/tasks/{task['id']}/approve",json={'approval_hash':pending['approval_hash']})
+    assert result.status_code==409 and len(provider.calls)==1

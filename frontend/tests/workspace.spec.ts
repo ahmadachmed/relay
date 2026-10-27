@@ -1266,7 +1266,7 @@ for (const width of [390, 1440]) test(`automatic report search needs explicit on
   await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate failures');
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(1);
-  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true,search_all:true,include_suites:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true,search_all:true,include_suites:true,max_rounds:8,max_input_bytes:300000,max_wall_seconds:120});
   expect(requests[0].report_attachment).toBeNull();
   await expect(page.getByLabel('Automatic report search')).toContainText('Some failures were not listed');
   await expect(page.getByLabel('Automatic report search')).toContainText('Optional knowledge omitted');
@@ -1299,7 +1299,7 @@ for (const width of [390, 1440]) test(`optional reference and report are shared 
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(1);
   expect(requests[0].reference_attachment).toEqual({conversation_id:scope,attachment_id:doc,sha256:docHash,share:true});
-  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:report,sha256:hash,share:true,search_all:true,include_suites:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:report,sha256:hash,share:true,search_all:true,include_suites:true,max_rounds:8,max_input_bytes:300000,max_wall_seconds:120});
   await expect(page.getByLabel('Reference details shared with AI')).toContainText('Expected 200');
   await expect(page.getByLabel('Reference details shared with AI').getByRole('link',{name:'Reference 0'})).toHaveAttribute('href','#reference-section-0');
   await expect(page.getByRole('checkbox',{name:/Share up to three relevant sections/})).not.toBeChecked();
@@ -1392,7 +1392,7 @@ test('saved-run report AI sharing is explicitly scoped to the selected run', asy
   await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate saved report');
   await page.getByRole('button',{name:'Send command'}).click();
   await expect.poll(()=>requests.length).toBe(1);
-  expect(requests[0].auto_report).toEqual({conversation_id:scope,run_id:id,artifact_id:artifact,sha256:hash,share:true,search_all:true,include_suites:true});
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,run_id:id,artifact_id:artifact,sha256:hash,share:true,search_all:true,include_suites:true,max_rounds:8,max_input_bytes:300000,max_wall_seconds:120});
   await expect(consent).not.toBeChecked();
 });
 
@@ -1429,7 +1429,7 @@ test('guided source task asks for exact snapshot approval before model sharing',
   await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
   await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[]}));
   let status='draft';const approvals:string[]=[];
-  const task=()=>({id:taskId,conversation_id:scope,status,created_at:Date.now()/1000,expires_at:Date.now()/1000+900,message:'Investigate',approval_hash:status==='awaiting_approval'?firstHash:secondHash,recipient:{base_url:'http://localhost:20128/v1',model:'synthetic',protocol:'chat_completions',local_gateway_may_forward:true},capabilities:status==='draft'?[]:[{kind:'source',purpose:'Read rules',search_all:false,include_suites:false,resources:[{id:'rules',provider:'local',revision:null,config_sha256:'e'.repeat(64)}]}],limitations:['Sources require two approvals.'],source_snapshot:['awaiting_source_share','completed'].includes(status)?{files:[{source_id:'rules',path:'docs/rules.md',sha256:sourceSha,commit:null}]}:null,source_diagnostics:[],answer:status==='completed'?{answer:{action:'answer',message:'Source reviewed',selection:null,hypotheses:[],bug_report_draft:null},facts:null,run_id:null,limitations:[]}:null});
+  const task=()=>({id:taskId,conversation_id:scope,status,created_at:Date.now()/1000,expires_at:Date.now()/1000+900,message:'Investigate',approval_hash:status==='awaiting_approval'?firstHash:secondHash,recipient:{base_url:'http://localhost:20128/v1',model:'synthetic',protocol:'chat_completions',local_gateway_may_forward:true},capabilities:status==='draft'?[]:[{kind:'source',purpose:'Read rules',search_all:false,include_suites:false,resources:[{id:'rules',provider:'local',revision:null,config_sha256:'e'.repeat(64)}]}],limitations:['Sources require two approvals.'],source_snapshot:['awaiting_source_share','completed'].includes(status)?{identity:{project_id:'api',sut_id:'service-a',environment:'uat',branch:'main',commit:null},files:[{source_id:'rules',path:'docs/rules.md',sha256:sourceSha,commit:null}]}:null,source_diagnostics:[],answer:status==='completed'?{answer:{action:'answer',message:'Source reviewed',selection:null,hypotheses:[],bug_report_draft:null},facts:null,run_id:null,limitations:[]}:null});
   await page.route(`**/api/conversations/${scope}/tasks`,r=>r.fulfill({json:task()}));
   await page.route(`**/api/conversations/${scope}/tasks/${taskId}/plan`,r=>{status='awaiting_approval';return r.fulfill({json:task()});});
   await page.route(`**/api/conversations/${scope}/tasks/${taskId}`,r=>r.fulfill({json:task()}));
@@ -1441,6 +1441,8 @@ test('guided source task asks for exact snapshot approval before model sharing',
   await page.getByRole('button',{name:'Approve task access'}).click();
   await expect(page.getByLabel('Source versions for approval')).toContainText(sourceSha);
   expect(approvals).toEqual([firstHash]);
+  await page.reload();
+  await expect(page.getByLabel('Source versions for approval')).toContainText(sourceSha);
   await page.getByRole('button',{name:'Approve source sharing'}).click();
   await expect(page.getByLabel('Investigation task')).toContainText('Source reviewed');
   expect(approvals).toEqual([firstHash,secondHash]);

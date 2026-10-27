@@ -234,3 +234,91 @@ def test_saved_run_comparison_api_checks_both_run_scopes(tmp_path):
         assert client.post(url,json=body).json()['counts']=={'fail_to_pass':1}
         assert client.post(url,json={**body,'second_run_id':other}).status_code==404
         assert client.post(url,json={**body,'second_sha256':'0'*64}).status_code==409
+
+
+def test_saved_comparability_does_not_ignore_pipeline_parameters_or_sut(tmp_path):
+    app,first_run,store=setup(tmp_path);second_run=submitted(app.state.execution)['id']
+    first=store.upload(first_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(second_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="PASS"/></test></suite></robot>')
+    import json
+    record=app.state.execution.get(second_run)
+    record['plan']['parameters']['TAGS']='different-tag'
+    record['plan']['sut_id']='different-sut'
+    with app.state.execution.connect() as db:db.execute('UPDATE plans SET record=? WHERE id=?',(json.dumps(record),second_run))
+    result=store.compare_saved_reports(first_run,first['id'],first['sha256'],second_run,second['id'],second['sha256'])
+    assert result['comparability']['status']=='different'
+    assert 'parameters' in result['comparability']['different_fields']
+    assert 'parameters' not in result['comparability']['first_identity']
+    assert 'sut_id' in result['comparability']['missing_fields']
+
+
+def test_suspected_flaky_requires_comparable_saved_runs_and_shared_test_detail(tmp_path,monkeypatch):
+    import json
+    from relay.assistant import Answer
+    monkeypatch.setenv('RELAY_AI_ENABLED','1')
+    app,first_run,store=setup(tmp_path);second_run=submitted(app.state.execution)['id']
+    for run_id in (first_run,second_run):
+        saved=app.state.execution.get(run_id);saved['plan']['sut_id']='service-a'
+        with app.state.execution.connect() as db: db.execute('UPDATE plans SET record=? WHERE id=?',(json.dumps(saved),run_id))
+    first=store.upload(first_run,'output.xml',b'<robot><suite name="API"><test name="Login"><msg>timeout</msg><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(second_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="PASS"/></test></suite></robot>')
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return Answer.model_validate({'action':'answer','message':'Inspect','selection':None,'hypotheses':[],'bug_report_draft':None,'report_operations':[{'operation':'read_test','test_id':'0','offset':0}]})
+            return Answer.model_validate({'action':'analyze','message':'Suspected intermittent behavior; association is unverified.','selection':None,'hypotheses':[],'bug_report_draft':None,
+                'classification':{'category':'suspected_flaky','reason':'Results differ','artifact_ids':[first['id']],'verification':'Verify run association and repeat'},
+                'report_citations':[{'section_id':'0','claim':'Failure detail'}], 'comparison_citations':[{'pair_id':'0','claim':'Observed change'}]})
+    with TestClient(app) as client:
+        scope=client.post('/api/conversations').json()['id']
+        auto={'conversation_id':scope,'run_id':first_run,'artifact_id':first['id'],'sha256':first['sha256'],'share':True}
+        compare={'conversation_id':scope,'first_run_id':first_run,'first_id':first['id'],'first_sha256':first['sha256'],
+                 'second_run_id':second_run,'second_id':second['id'],'second_sha256':second['sha256'],'share':True}
+        body={'message':'Investigate','share_context':True,'run_id':first_run,'auto_report':auto,'comparison':compare}
+        app.state.assistant.provider=Provider()
+        response=client.post('/api/assistant/chat',json=body)
+        assert response.status_code==200,response.text
+        assert response.json()['answer']['classification']['category']=='suspected_flaky'
+        changed=app.state.execution.get(second_run);changed['commit']='f'*40
+        with app.state.execution.connect() as db:db.execute('UPDATE plans SET record=? WHERE id=?',(json.dumps(changed),second_run))
+        app.state.assistant.provider=Provider()
+        denied=client.post('/api/assistant/chat',json=body)
+        assert denied.status_code==422 and denied.json()['detail']['code']=='ai_missing_evidence'
+
+
+def test_suspected_flaky_cannot_be_returned_from_a_single_failure(tmp_path,monkeypatch):
+    from relay.assistant import Answer
+    monkeypatch.setenv('RELAY_AI_ENABLED','1')
+    app,run_id,store=setup(tmp_path)
+    item=store.upload(run_id,'output.xml',b'<robot><suite name="API"><test name="Login"><msg>timeout</msg><status status="FAIL"/></test></suite></robot>')
+    class Provider:
+        async def answer(self,context):
+            return Answer.model_validate({'action':'analyze','message':'Maybe flaky','selection':None,'hypotheses':[],'bug_report_draft':None,
+                'classification':{'category':'suspected_flaky','reason':'Failure','artifact_ids':[item['id']],'verification':'Rerun'}})
+    app.state.assistant.provider=Provider()
+    with TestClient(app) as client:
+        response=client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':run_id})
+        assert response.status_code==422 and response.json()['detail']['code']=='ai_missing_evidence'
+
+
+def test_saved_report_detail_can_support_provisional_bug_classification(tmp_path,monkeypatch):
+    from relay.assistant import Answer
+    monkeypatch.setenv('RELAY_AI_ENABLED','1')
+    app,run_id,store=setup(tmp_path)
+    item=store.upload(run_id,'output.xml',b'<robot><suite name="API"><test name="Login"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>')
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return Answer.model_validate({'action':'answer','message':'Inspect','selection':None,'hypotheses':[],'bug_report_draft':None,'report_operations':[{'operation':'read_test','test_id':'0','offset':0}]})
+            return Answer.model_validate({'action':'analyze','message':'Suspected product issue','selection':None,'hypotheses':[],'bug_report_draft':None,
+                'classification':{'category':'suspected_product_bug','reason':'HTTP 500','artifact_ids':[item['id']],'verification':'Inspect service logs'},
+                'report_citations':[{'section_id':'0','claim':'HTTP 500'}]})
+    app.state.assistant.provider=Provider()
+    with TestClient(app) as client:
+        scope=client.post('/api/conversations').json()['id']
+        auto={'conversation_id':scope,'run_id':run_id,'artifact_id':item['id'],'sha256':item['sha256'],'share':True}
+        result=client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':run_id,'auto_report':auto,'include_failure_details':False})
+        assert result.status_code==200,result.text
+        assert result.json()['answer']['classification']['category']=='suspected_product_bug'

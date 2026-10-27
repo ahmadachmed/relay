@@ -17,7 +17,7 @@ from .source_runtime import digest, encoded
 
 TASK_TTL = 900
 RESULT_RETENTION = 7 * 86400
-WORK_LEASE = 120
+WORK_LEASE = 240
 
 
 class TaskStart(Strict):
@@ -48,7 +48,7 @@ def recipient():
 
 
 def source_snapshot(session):
-    return {'identity':session.identity, 'configs':dict(sorted(session.configs.items())),
+    return {'identity':session.identity, 'limits':session.limits.model_dump(), 'configs':dict(sorted(session.configs.items())),
             'files':[{'source_id':source_id,'path':path,'sha256':value['sha256'],
                       'commit':value.get('commit'),'repository':value.get('repository')}
                      for (source_id,path),value in sorted(session.snapshots.items())]}
@@ -93,7 +93,8 @@ class InvestigationTasks:
                 'recipient_fingerprint':fingerprint,'capabilities':[],'approval_hash':None,'answer':None,'error':None,
                 'limitations':['Registered sources require an initial read approval and a second approval of exact source hashes before AI sharing.',
                                'A local gateway may forward data to an upstream model provider.',
-                               'Selected-run status and artifact metadata may change; after approval the current run metadata is shared.']}
+                               'Selected-run status and artifact metadata may change; after approval the current run metadata is shared.',
+                               'Related-run discovery is bounded; older runs or artifacts may be omitted.']}
         with self.execution.connect() as db:
             db.execute('DELETE FROM investigation_tasks WHERE json_extract(record, "$.expires_at") < ?', (now-RESULT_RETENTION,))
             db.execute('INSERT INTO investigation_tasks VALUES (?,?,?)', (record['id'],scope,json.dumps(record,ensure_ascii=False)))
@@ -133,7 +134,10 @@ class InvestigationTasks:
             return {}
         selected=self.execution.get(record['run_id'])['plan']
         with self.execution.connect() as db:
-            rows=db.execute('SELECT e.run_id,e.id,e.metadata,p.record FROM evidence e JOIN plans p ON p.id=e.run_id JOIN remote_runs r ON r.id=e.run_id WHERE e.body IS NOT NULL AND e.expires_at>? ORDER BY e.rowid DESC LIMIT 100', (time.time(),)).fetchall()
+            query='SELECT e.run_id,e.id,e.metadata,p.record FROM evidence e JOIN plans p ON p.id=e.run_id JOIN remote_runs r ON r.id=e.run_id WHERE e.body IS NOT NULL AND e.expires_at>?'
+            selected_rows=db.execute(query+' AND e.run_id=? ORDER BY e.rowid DESC LIMIT 20', (time.time(),record['run_id'])).fetchall()
+            recent_rows=db.execute(query+' AND e.run_id!=? ORDER BY e.rowid DESC LIMIT 100', (time.time(),record['run_id'])).fetchall()
+            rows=selected_rows+recent_rows
         values={}
         for run_id, artifact_id, raw, plan_raw in rows:
             metadata=json.loads(raw);saved=json.loads(plan_raw);plan=saved['plan']
@@ -147,7 +151,7 @@ class InvestigationTasks:
             values[artifact_id]={'id':artifact_id,'run_id':run_id,'sha256':metadata['sha256'],
                 'name':metadata['name'],'association':metadata.get('association','unverified'),
                 'run_fingerprint':digest(encoded({'plan':plan,'commit':saved.get('commit')})),
-                'branch':redact(plan.get('branch')), 'commit':saved.get('commit'), 'environment':redact(environment)}
+                'branch':redact(plan.get('branch')), 'commit':saved.get('commit'), 'environment':redact(environment), 'attempted_at':saved.get('attempted_at')}
         selected_items=[x for x in values.values() if x['run_id']==record['run_id']]
         other_items=[x for x in values.values() if x['run_id']!=record['run_id']]
         return {x['id']:x for x in (selected_items+other_items)[:20]}
@@ -157,7 +161,7 @@ class InvestigationTasks:
             identity=self.assistant.sources.identity(request)
             registry=self.assistant.sources.registry()
         except PlanError:
-            return {}, None
+            return {}, None, None
         candidates={}
         for key in sorted(registry.sources):
             try:
@@ -167,7 +171,7 @@ class InvestigationTasks:
             candidates[key]={'id':key,'category':source.category,'scope_id':source.scope_id,
                 'provider':source.provider,'revision':source.revision,'format':source.format,
                 'config_sha256':self.assistant.sources.fingerprint(source)}
-        return candidates, identity
+        return candidates, identity, registry.limits.model_dump()
 
     def _check_sources(self, record):
         source_caps=[cap for cap in record['capabilities'] if cap['kind']=='source']
@@ -178,6 +182,8 @@ class InvestigationTasks:
             raise PlanError('task_stale', 'Source identity is missing.', 409)
         registry=self.assistant.sources.registry()
         for capability in source_caps:
+            if registry.limits.model_dump() != capability.get('source_limits'):
+                raise PlanError('task_stale', 'Approved source limits changed.', 409)
             for resource in capability['resources']:
                 source=self.assistant.sources.authorize(registry, resource['id'], identity)
                 if self.assistant.sources.fingerprint(source) != resource['config_sha256']:
@@ -208,9 +214,9 @@ class InvestigationTasks:
                     if metadata.get('format') != 'robot_xml' or metadata.get('sha256') != resource['sha256'] or digest(row[1]) != resource['sha256']:
                         raise PlanError('task_stale', 'Approved saved-run evidence changed.', 409)
                     continue
-                row=db.execute('SELECT sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?',
+                row=db.execute('SELECT sha256,body FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?',
                     (record['conversation_id'],resource['id'],time.time()-7*86400)).fetchone()
-                if row is None or row[0] != resource['sha256']:
+                if row is None or row[0] != resource['sha256'] or digest(row[1]) != resource['sha256']:
                     raise PlanError('task_stale', 'An approved attachment changed or was deleted; create a new task.', 409)
 
     def guard(self, scope, task_id, expected_status='running'):
@@ -256,15 +262,15 @@ class InvestigationTasks:
             saved_candidates={item['id']:saved_candidates[item['id']] for item in saved_metadata}
             related_candidates=self._related_saved_candidates(record)
             related_metadata=[{'id':item['id'],'run_id':item['run_id'],'sha256':item['sha256'], 'filename':redact(item['name']),
-                'association':item['association'],'branch':item['branch'],'commit':item['commit'],'environment':item['environment']} for item in related_candidates.values()]
+                'association':item['association'],'branch':item['branch'],'commit':item['commit'],'environment':item['environment'],'attempted_at':item['attempted_at']} for item in related_candidates.values()]
             planning_request=ChatRequest.model_validate({'message':record['message'], 'share_context':True,
                 'run_id':record['run_id'], 'context':record['context']})
-            source_candidates, source_identity=self._source_candidates(planning_request)
+            source_candidates, source_identity, source_limits=self._source_candidates(planning_request)
             source_metadata=list(source_candidates.values())[:8]
             source_candidates={item['id']:item for item in source_metadata}
             metadata=[{'id':item['id'],'sha256':item['sha256'],'filename':redact(item['filename']),'size':item['size'],
                        'status':'user_uploaded_unverified'} for item in attachments]
-            context={'task_planning':{'attachments':metadata,'saved_reports':saved_metadata,'related_saved_reports':related_metadata,'run_id':record.get('run_id'), 'sources':source_metadata, 'source_capabilities_available':bool(source_metadata)},
+            context={'task_planning':{'attachments':metadata,'saved_reports':saved_metadata,'related_saved_reports':related_metadata,'history_coverage':'Bounded candidate metadata; older runs or artifacts may be omitted.', 'run_id':record.get('run_id'), 'sources':source_metadata, 'source_capabilities_available':bool(source_metadata)},
                      'message':redact(record['message']),'history':redact(record['request']['history'])}
             if model_input_size(context) > 64000:
                 raise PlanError('ai_context_limit', 'Task planning context exceeds the AI input budget.', 413)
@@ -294,7 +300,7 @@ class InvestigationTasks:
                     raise PlanError('task_plan_invalid','Model requested an attachment outside this conversation.',502)
                 resources=[pool[item] for item in ids]
                 formats=[item.get('filename', item.get('name','')).rsplit('.',1)[-1].lower() for item in resources]
-                if ((proposal.kind in ('report','saved_report','comparison','saved_comparison') and any(fmt!='xml' for fmt in formats))
+                if ((proposal.kind in ('report','comparison') and any(fmt!='xml' for fmt in formats))
                     or (proposal.kind=='reference' and formats[0] not in ('txt','md','pdf','docx'))
                     or (proposal.kind not in ('report','saved_report') and (proposal.search_all or proposal.include_suites))
                     or (proposal.kind in ('report','saved_report') and ({'report','saved_report'} & kinds))
@@ -310,10 +316,13 @@ class InvestigationTasks:
                     continue
                 if proposal.kind=='source':
                     capabilities.append({'kind':'source','purpose':redact(proposal.purpose),'search_all':False,'include_suites':False,
-                        'resources':[dict(item) for item in resources]})
+                        'source_limits':source_limits, 'resources':[dict(item) for item in resources]})
                     continue
                 capabilities.append({'kind':proposal.kind,'purpose':redact(proposal.purpose),
                     'search_all':proposal.search_all,'include_suites':proposal.include_suites,
+                    'max_rounds':8 if proposal.kind in ('report','saved_report') else None,
+                    'max_input_bytes':300000 if proposal.kind in ('report','saved_report') else None,
+                    'max_wall_seconds':120 if proposal.kind in ('report','saved_report') else None,
                     'resources':[{'id':item['id'],'sha256':item['sha256'],'filename':redact(item.get('filename', item.get('name',''))),
                                   'association':item.get('association','unverified')} for item in resources]})
             with self.execution.connect() as db:
@@ -325,6 +334,8 @@ class InvestigationTasks:
                 self._check_run(current, db)
                 current['capabilities']=capabilities
                 current['source_identity']=source_identity if any(cap['kind']=='source' for cap in capabilities) else None
+                if not source_candidates:
+                    current['limitations'].append('No eligible source metadata was available for this task; check source configuration and project, SUT and environment selection.')
                 self._check_sources(current)
                 self._check_resources(current, db)
                 current['planner_message']=redact(response.message)
@@ -336,6 +347,7 @@ class InvestigationTasks:
                     current['status']='awaiting_approval'
                 else:
                     current['status']='completed'
+                    current['limitations'].append('No attachment, saved report or source content was accessed; the answer uses only the message and planning metadata.')
                     current['answer']={'answer':redact_source_metadata(response.model_dump()),'facts':None,'run_id':None,'limitations':current['limitations']}
                 self._save(db,current)
                 return self._public(current)
@@ -365,10 +377,12 @@ class InvestigationTasks:
             resources=capability['resources']
             if capability['kind']=='report':
                 values['auto_report']={'conversation_id':scope,'attachment_id':resources[0]['id'],'sha256':resources[0]['sha256'],
-                    'share':True,'search_all':capability['search_all'],'include_suites':capability['include_suites']}
+                    'share':True,'search_all':capability['search_all'],'include_suites':capability['include_suites'],
+                    'max_rounds':capability['max_rounds'],'max_input_bytes':capability['max_input_bytes'],'max_wall_seconds':capability['max_wall_seconds']}
             elif capability['kind']=='saved_report':
                 values['auto_report']={'conversation_id':scope,'run_id':record['run_id'],'artifact_id':resources[0]['id'],
-                    'sha256':resources[0]['sha256'],'share':True,'search_all':capability['search_all'],'include_suites':capability['include_suites']}
+                    'sha256':resources[0]['sha256'],'share':True,'search_all':capability['search_all'],'include_suites':capability['include_suites'],
+                    'max_rounds':capability['max_rounds'],'max_input_bytes':capability['max_input_bytes'],'max_wall_seconds':capability['max_wall_seconds']}
             elif capability['kind']=='saved_comparison':
                 values['comparison']={'conversation_id':scope,'first_run_id':resources[0]['run_id'],
                     'first_id':resources[0]['id'],'first_sha256':resources[0]['sha256'],
@@ -432,7 +446,7 @@ class InvestigationTasks:
                     self._save(db,current)
                     return self._public(current)
             result=await self.assistant.chat(self._request(record),task_guard=lambda:self.guard(scope,task_id),
-                expected_source_snapshot=record.get('source_snapshot'))
+                expected_source_snapshot=record.get('source_snapshot'), task_wall_seconds=120 if record.get('source_snapshot') else None)
             with self.execution.connect() as db:
                 db.execute('BEGIN IMMEDIATE')
                 current=self._get(scope,task_id,db)

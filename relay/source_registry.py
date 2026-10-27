@@ -67,9 +67,9 @@ class SourceLimits(Contract):
     sections: int = Field(default=256, ge=1, le=256)
     candidates: int = Field(default=8, ge=1, le=8)
     context_bytes: int = Field(default=20_000, ge=1, le=20_000)
-    model_rounds: int = Field(default=3, ge=1, le=3)
-    model_input_bytes: int = Field(default=100_000, ge=48_000, le=100_000)
-    wall_seconds: int = Field(default=40, ge=1, le=40)
+    model_rounds: int = Field(default=3, ge=1, le=12)
+    model_input_bytes: int = Field(default=100_000, ge=48_000, le=600_000)
+    wall_seconds: int = Field(default=40, ge=1, le=300)
 
 
 class SourceRegistry(Contract):

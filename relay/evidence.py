@@ -160,7 +160,9 @@ class EvidenceStore:
         keys=[key for key,spec in specs.items() if spec.get('kind')=='environment']
         environment=plan.get('parameters',{}).get(keys[0]) if len(keys)==1 else None
         return {'run_id':run_id, 'project_id':plan['project_id'], 'repository':project['repository'],
-                'framework':project['framework'], 'branch':plan['branch'], 'commit':record.get('commit'),
+                'framework':project['framework'], 'pipeline_id':plan['pipeline_id'], 'sut_id':plan.get('sut_id'),
+                'parameters':plan.get('parameters'), 'branch':plan['branch'], 'commit':record.get('commit'),
+                'attempted_at':record.get('attempted_at'),
                 'environment':environment}
 
     def compare_saved_reports(self, first_run_id, first_id, first_sha, second_run_id, second_id, second_sha, offset=0, limit=20, sanitize=None):
@@ -170,20 +172,27 @@ class EvidenceStore:
         first, sha1, meta1=self.robot_evidence(first_run_id,first_id,first_sha)
         second, sha2, meta2=self.robot_evidence(second_run_id,second_id,second_sha)
         identity1,identity2=self.run_identity(first_run_id),self.run_identity(second_run_id)
-        keys=('project_id','repository','framework','branch','commit','environment')
+        keys=('project_id','repository','framework','pipeline_id','sut_id','branch','commit','environment')
         missing=[key for key in keys if not identity1.get(key) or not identity2.get(key)]
         different=[key for key in keys if identity1.get(key) and identity2.get(key) and identity1[key]!=identity2[key]]
+        if identity1['parameters'] is None or identity2['parameters'] is None:
+            missing.append('parameters')
+        elif identity1['parameters'] != identity2['parameters']:
+            different.append('parameters')
         status='different' if different else 'unknown' if missing else 'matching_metadata_unverified'
+        first_time,second_time=identity1.get('attempted_at'),identity2.get('attempted_at')
+        recorded_order=('unknown' if not isinstance(first_time,(int,float)) or not isinstance(second_time,(int,float)) or first_time==second_time
+                        else 'first_before_second' if first_time<second_time else 'first_after_second')
         result=compare_robot(first,second,sha1,sha2,offset,limit,sanitize,allow_identical=True)
         clean=sanitize or (lambda value:value)
-        safe_identity=lambda identity: {key:(value if key=='run_id' else clean(value)) for key,value in identity.items()}
+        safe_identity=lambda identity: {key:(value if key=='run_id' else clean(value)) for key,value in identity.items() if key!='parameters'}
         result.update(first_run_id=first_run_id, second_run_id=second_run_id,
                       first_artifact_id=first_id, second_artifact_id=second_id,
-                      comparability={'status':status,'different_fields':different,'missing_fields':missing,
+                      comparability={'status':status,'different_fields':different,'missing_fields':missing,'recorded_order':recorded_order,
                                      'first_identity':safe_identity(identity1),'second_identity':safe_identity(identity2),
                                      'first_association':meta1.get('association','unverified'),
                                      'second_association':meta2.get('association','unverified')})
-        result['limitations'].append('Run metadata is recorded but uploaded evidence association remains operator-asserted; comparability is not verified.')
+        result['limitations'].append('Run metadata and trigger attempt order are recorded, but report association is operator-asserted; execution chronology and comparability are not verified.')
         return result
 
     def download(self, run_id, artifact_id):

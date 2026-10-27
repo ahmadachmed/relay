@@ -70,6 +70,9 @@ class AutoReport(Strict):
     share: Literal[True]
     search_all: bool = False
     include_suites: bool = False
+    max_rounds: int = Field(default=4, ge=1, le=12)
+    max_input_bytes: int = Field(default=130000, ge=16000, le=600000)
+    max_wall_seconds: int = Field(default=40, ge=1, le=300)
 
     @model_validator(mode='before')
     @classmethod
@@ -90,6 +93,9 @@ class SavedAutoReport(Strict):
     share: Literal[True]
     search_all: bool = False
     include_suites: bool = False
+    max_rounds: int = Field(default=4, ge=1, le=12)
+    max_input_bytes: int = Field(default=130000, ge=16000, le=600000)
+    max_wall_seconds: int = Field(default=40, ge=1, le=300)
 
     @model_validator(mode='before')
     @classmethod
@@ -206,7 +212,7 @@ class Hypothesis(Strict):
 
 
 class Classification(Strict):
-    category: Literal['suspected_product_bug', 'suspected_automation_bug', 'environment_infrastructure', 'inconclusive']
+    category: Literal['suspected_product_bug', 'suspected_automation_bug', 'environment_infrastructure', 'suspected_flaky', 'inconclusive']
     reason: str = Field(min_length=1, max_length=1500)
     artifact_ids: list[str] = Field(max_length=8)
     verification: str = Field(min_length=1, max_length=1500)
@@ -327,7 +333,8 @@ When task_planning is absent return an empty access_requests list. Asking for ac
 
 A report comparison is based on user-uploaded files with unverified environment, revision and execution associations.
 Matching suite/test names do not prove equivalent tests or comparable runs. For saved comparisons, explicitly
-disclose differences or missing run metadata and operator-asserted report association. Fail-to-pass is an observation, not proof
+disclose differences or missing run metadata, the recorded order and operator-asserted report association.
+Do not treat model-selected report order as verified execution chronology. Fail-to-pass is an observation, not proof
 of flakiness, causality or root cause. Cite comparison_citations only for comparison.items pair_id values supplied in
 this request; return [] when no comparison is supplied. Disclose missing and ambiguous identities and partial coverage.
 
@@ -393,8 +400,14 @@ Return missing_context as up to five concise actionable requests (empty when non
 Without expected behavior or relevant automation code, avoid assuming assertion failure proves
 product or automation defects. Keep classifications provisional and grounded in report evidence.
 For action analyze return a classification: suspected_product_bug, suspected_automation_bug,
-environment_infrastructure, or inconclusive, with reason, artifact_ids and verification steps.
-Specific classification citations must reference artifacts in the supplied failures list, not merely
+environment_infrastructure, suspected_flaky, or inconclusive, with reason, artifact_ids and verification steps.
+Only propose suspected_flaky when two distinct saved runs have matching recorded comparability metadata, a cited
+unique test pair has differing PASS/FAIL results, and a cited failure detail from the selected saved report is shared.
+Report association remains operator-asserted; this is a tentative hypothesis, not proof of flakiness.
+For saved-run reports, specific classifications may instead use a cited, explicitly shared failed test
+from the same saved artifact. In planning without a run, action answer may include a provisional classification
+with no artifact IDs only when a cited uploaded failed test is shared. A report upload is unverified.
+Otherwise specific classification citations must reference artifacts in the supplied failures list, not merely
 artifact metadata. Failures omitted by truncation cannot support a specific label.
 These are provisional triage labels, never verified root causes. Assertion failures alone do not
 prove product bugs. HTTP 503 during setup suggests a possible dependency/environment issue;
@@ -585,7 +598,7 @@ class Assistant:
         return self.conversation_files.compare_reports(comparison.conversation_id, comparison.first_id, comparison.first_sha256,
                 comparison.second_id, comparison.second_sha256, comparison.offset, 20, redact)
 
-    async def chat(self, request, task_guard=None, expected_source_snapshot=None):
+    async def chat(self, request, task_guard=None, expected_source_snapshot=None, task_wall_seconds=None):
         if os.getenv('RELAY_AI_ENABLED') != '1':
             raise PlanError('ai_disabled', 'AI is disabled. Structured commands remain available.', 503)
         if self.lock.locked():
@@ -797,7 +810,7 @@ class Assistant:
                 if entry not in history_pages:
                     history_pages.append(entry)
                     history_omitted_sections += max(0,len(page['items'])-len(selected))
-                if len(history_pages)>2:
+                if len(history_pages)>4:
                     history_pages.pop(0);history_omitted_pages+=1
                 context['evidence_history']={'pages':history_pages,'omitted_pages':history_omitted_pages,
                     'omitted_sections':history_omitted_sections, 'limitations':['Only retained, shared history handles are citable; report coverage is partial.']}
@@ -815,7 +828,7 @@ class Assistant:
                     raise PlanError('attachment_changed', 'The selected attachment changed. Select it again.', 409)
                 auto_summary = {'search_all': ref.search_all, 'include_suites': ref.include_suites, 'report_scope': page.get('scope'), 'association': page.get('association', 'unverified'), 'failures': page['items'], 'total_failures': page['total'], 'total_tests': page['total_tests'],
                                 'offset': page['offset'], 'next_offset': page['next_offset'], 'sha256': ref.sha256,
-                                'coverage': 'Partial report only. Only the latest test detail page is shown and citable; earlier detail pages are not retained.', 'tests_with_sections_shared': 0}
+                                'coverage': 'Partial report only. The latest detail and bounded retained history are citable; omitted evidence remains unread or unavailable.', 'tests_with_sections_shared': 0}
                 context['auto_report'] = auto_summary
                 make_room_for_report()
                 while auto_summary['failures'] and context_size() > 44000:
@@ -876,7 +889,7 @@ class Assistant:
             session = None
             source_manifest = None
             try:
-                async with asyncio.timeout(40):
+                async with asyncio.timeout(request.auto_report.max_wall_seconds if request.auto_report else task_wall_seconds or 40):
                     baseline_context = deepcopy(context)
                     session = await self.sources.start(request)
                     if session:
@@ -897,7 +910,7 @@ class Assistant:
                         for candidate in candidates[:3]:
                             self._include_source(context, session, session.read(candidate['handle']))
                     call_bytes = 0
-                    round_limit = (min(4, session.limits.model_rounds) if request.auto_report and session else 4 if request.auto_report else session.limits.model_rounds if session else 1)
+                    round_limit = (min(request.auto_report.max_rounds, session.limits.model_rounds) if request.auto_report and session else request.auto_report.max_rounds if request.auto_report else session.limits.model_rounds if session else 1)
                     for round_index in range(round_limit):
                         if task_guard:
                             await asyncio.to_thread(task_guard)
@@ -934,7 +947,7 @@ class Assistant:
                             if source_snapshot(session) != expected_source_snapshot:
                                 raise PlanError('task_source_changed', 'Source dependencies changed; create a new task.', 409)
                         size = model_input_size(context)
-                        if call_bytes + size > (session.limits.model_input_bytes if session else (110_000 if request.auto_report else MAX_CALL_BYTES)):
+                        if call_bytes + size > (min(session.limits.model_input_bytes, request.auto_report.max_input_bytes) if session and request.auto_report else session.limits.model_input_bytes if session else request.auto_report.max_input_bytes if request.auto_report else MAX_CALL_BYTES):
                             if round_index == 0:
                                 raise PlanError('ai_context_limit', 'AI request exceeds cumulative input budget.', 413)
                             if request.auto_report:
@@ -1119,7 +1132,7 @@ class Assistant:
                             break
                         if not session or not context.get('source_context',{}).get('retrieval_enabled'):
                             raise PlanError('source_consent', 'Unsolicited or unsupported model retrieval operation.', 502)
-                        if round_index == session.limits.model_rounds - 1:
+                        if round_index == round_limit - 1:
                             session.diagnostics.append('Model retrieval round limit reached; answer is partial.')
                             answer.retrieval_requests = []
                             break
@@ -1193,16 +1206,40 @@ class Assistant:
                 raise PlanError('ai_invalid_citation', 'Model suggested an unsupported evidence reference.', 502)
             classification = answer.classification
             if classification:
-                if answer.action != 'analyze':
-                    raise PlanError('ai_invalid_classification', 'Classification requires analysis of the selected run.', 502)
+                planning_report = (answer.action == 'answer' and request.run_id is None and report_shared
+                    and report_shared.get('scope') == 'operator_uploaded' and report_shared['test']['status'] == 'FAIL'
+                    and bool(answer.report_citations) and not classification.artifact_ids)
+                if answer.action != 'analyze' and not planning_report:
+                    raise PlanError('ai_invalid_classification', 'Classification requires a selected run or cited uploaded failure.', 502)
                 if not set(classification.artifact_ids) <= allowed:
                     raise PlanError('ai_invalid_citation', 'Classification contains unsupported evidence.', 502)
                 shared_failure_artifacts = {artifact_id for failure in (facts or {}).get('failures', [])
                                             for artifact_id in failure['artifact_ids']} & allowed
-                if classification.category != 'inconclusive' and not set(classification.artifact_ids) <= shared_failure_artifacts:
-                    raise PlanError('ai_invalid_citation', 'Classification must cite a report with failure details shared in this request.', 502)
-                if classification.category != 'inconclusive' and (not classification.artifact_ids or not request.include_failure_details or not facts['can_analyze_failure_details']):
-                    raise PlanError('ai_missing_evidence', 'A specific failure classification requires shared failure details and parsed evidence.', 502)
+                if classification.category == 'suspected_flaky':
+                    valid_comparison = (isinstance(request.comparison, SavedComparison) and comparison_shared
+                        and comparison_shared.get('comparability',{}).get('status') == 'matching_metadata_unverified')
+                    saved_ref = request.auto_report if isinstance(request.auto_report, SavedAutoReport) else None
+                    selected_id = (request.comparison.first_id if valid_comparison and request.run_id == request.comparison.first_run_id
+                        else request.comparison.second_id if valid_comparison and request.run_id == request.comparison.second_run_id else None)
+                    cited_ids = {citation.pair_id for citation in answer.comparison_citations}
+                    relevant = [item for item in (comparison_shared or {}).get('items',[]) if item['pair_id'] in cited_ids
+                        and item['transition'] in ('fail_to_pass','pass_to_fail')]
+                    selected_test_field = 'first_test_id' if valid_comparison and request.run_id == request.comparison.first_run_id else 'second_test_id'
+                    if (not valid_comparison or not saved_ref or saved_ref.artifact_id != selected_id or not report_shared
+                            or report_shared['test']['status'] != 'FAIL' or not answer.report_citations
+                            or set(classification.artifact_ids) != {selected_id}
+                            or not any(item[selected_test_field] == report_shared['test_id'] for item in relevant)):
+                        raise PlanError('ai_missing_evidence', 'Suspected flakiness requires comparable saved-run metadata, a cited PASS/FAIL pair, and shared failure detail for that test.', 422)
+                elif classification.category != 'inconclusive' and not planning_report:
+                    saved_ref = request.auto_report if isinstance(request.auto_report, SavedAutoReport) else None
+                    shared_saved_failure = bool(saved_ref and report_shared and report_shared.get('scope') == 'saved_run'
+                        and report_shared['test']['status'] == 'FAIL' and answer.report_citations
+                        and set(classification.artifact_ids) == {saved_ref.artifact_id})
+                    if not shared_saved_failure:
+                        if not set(classification.artifact_ids) <= shared_failure_artifacts:
+                            raise PlanError('ai_invalid_citation', 'Classification must cite a report with failure details shared in this request.', 502)
+                        if not classification.artifact_ids or not request.include_failure_details or not facts['can_analyze_failure_details']:
+                            raise PlanError('ai_missing_evidence', 'A specific failure classification requires shared failure details and parsed evidence.', 502)
             elif answer.action == 'analyze':
                 answer.classification = Classification(category='inconclusive', reason='No validated classification was provided.', artifact_ids=[], verification='Review the available report and failure details before classifying.')
             if not allowed and answer.bug_report_draft:

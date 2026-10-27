@@ -364,7 +364,7 @@ def test_configurable_limits_and_expired_manifest(harness):
     with __import__('sqlite3').connect(app.state.assistant.sources.path) as db:
         db.execute('UPDATE source_manifests SET created=0')
     assert client.get('/api/source-manifests/'+manifest['id']).status_code==404
-    value['limits']['model_rounds']=4
+    value['limits']['model_rounds']=13
     config.write_text(json.dumps(value))
     assert post(client).status_code==503
 
@@ -720,3 +720,49 @@ def test_guided_investigation_combines_runs_report_reference_and_source(harness,
     assert done['status']=='completed',done
     final=done['answer']['answer']
     assert final['report_citations'] and final['comparison_citations'] and final['reference_citations'] and final['source_citations']
+
+
+def test_guided_report_and_sources_honor_explicit_extended_budgets(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1');monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    value=json.loads(config.read_text());value['limits']={'model_rounds':8,'model_input_bytes':300000,'wall_seconds':120};config.write_text(json.dumps(value))
+    scope=client.post('/api/conversations').json()['id']
+    body=('<robot><suite name="Root">'+''.join(f'<test name="case{i}"><msg>failure {i}</msg><status status="FAIL"/></test>' for i in range(5))+'</suite></robot>').encode()
+    report=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    def respond(context,index):
+        if context.get('task_planning'):
+            return answer(access_requests=[{'kind':'report','resource_ids':[report['id']],'purpose':'Inspect','search_all':False,'include_suites':False},
+                {'kind':'source','resource_ids':['rules'],'purpose':'Read rules','search_all':False,'include_suites':False}])
+        step=index-1
+        if step<=5:return answer(report_operations=[{'operation':'read_test','test_id':str(step-1),'offset':0}])
+        assert len(context['evidence_history']['pages'])==4
+        return answer(report_citations=[{'section_id':'0','claim':'Last failure'}],source_citations=[{'handle':context['source_context']['sections'][0]['handle'],'claim':'Rule'}])
+    provider=Fake(respond);app.state.assistant.provider=provider
+    request={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}
+    task=client.post(f'/api/conversations/{scope}/tasks',json=request).json();url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json()
+    report_cap=next(item for item in pending['capabilities'] if item['kind']=='report')
+    source_cap=next(item for item in pending['capabilities'] if item['kind']=='source')
+    assert report_cap['max_rounds']==8 and source_cap['source_limits']['model_rounds']==8
+    prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    done=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+    assert done['status']=='completed',done
+    assert len(provider.calls)==7
+    assert done['answer']['answer']['source_citations'] and len(done['answer']['evidence_history']['pages'])==4
+
+
+def test_guided_source_limits_change_requires_new_approval(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1');monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    def respond(context,index):
+        if context.get('task_planning'):
+            return answer(access_requests=[{'kind':'source','resource_ids':['rules'],'purpose':'Read rules','search_all':False,'include_suites':False}])
+        pytest.fail('Changed source limits must not reach the model')
+    provider=Fake(respond);app.state.assistant.provider=provider
+    scope=client.post('/api/conversations').json()['id']
+    request={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}
+    task=client.post(f'/api/conversations/{scope}/tasks',json=request).json();url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json();prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    value=json.loads(config.read_text());value['limits']={'model_rounds':4};config.write_text(json.dumps(value))
+    assert client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).status_code==409
+    assert len(provider.calls)==1

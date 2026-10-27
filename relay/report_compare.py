@@ -82,4 +82,5 @@ def compare_robot(first, second, first_sha, second_sha, offset=0, limit=20, sani
             'limitations':['Uploaded reports have unverified run, environment and revision associations.',
                 'Matching suite and test names does not prove identical code or comparable execution.',
                 'Fail-to-pass is an observed difference, not proof of flakiness or root cause.',
+                'Attempt or retry history is not verified; keyword retries are not whole-test reruns.',
                 'Duplicate and unnamed identities are not paired; unmatched tests are omitted.']}
