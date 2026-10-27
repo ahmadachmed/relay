@@ -19,9 +19,9 @@ this is not a reconstructed keyword tree. Suite setup/teardown outside tests is
 not returned. Reports without tests return zero rather than a passing verdict.
 Deletion/expiry removes access. No derived content is persisted.
 
-Remaining #45 work includes suite-level evidence, structured hierarchy/search,
-shared saved-run retrieval, document extraction, AI tools/citations, task approval
-continuation and frontend inspection. This slice does not complete #45 or M1.
+Suite-level evidence, report search, saved-run retrieval and guided task approval
+are described below. Keyword hierarchy, complete report coverage and operator
+acceptance remain incomplete; this does not complete #45 or M1.
 
 ## Share one test with AI (initial slice)
 
@@ -43,39 +43,104 @@ that flow. Report text and names are redacted before truncation. Records may be 
 For a long record, choose “Use next part” and approve sharing again. The continuation
 is bound to the same attachment, test, section and SHA-256 of the complete redacted
 text; changed redaction invalidates the continuation. Character offsets count Unicode
-code points in the redacted text, not bytes or positions in the original. Suite-level setup/teardown and
-unread records remain absent. Model-chosen retrieval, task-scoped resumable approval,
-semantic verification of citations, automatic full-report retrieval, and other attachment
-formats are future #45 work. This feature does not complete M1.
+code points in the redacted text, not bytes or positions in the original. Suite-level setup/teardown and unread records are not included in this manual test
+selection. Automatic discovery and guided task approval are described below.
+Citation membership does not verify semantic accuracy or complete report coverage.
 
-## Automatic failure discovery (bounded)
+## Report search and automatic discovery (bounded)
 
-Select one uploaded Robot XML report and check “Let AI search this report” for
-the next message. The configured model (including a local gateway's upstream)
-receives a redacted page of failure names and may request another failure page or
-sections of a previously listed failed test. The consent applies to this request,
-not later messages. Use the returned citations and shared section display to inspect
-what was actually sent from the latest test detail page. Earlier detail pages are
-not retained or citable in the response; the trace records only their IDs and counts.
-If optional knowledge prevents report data from fitting, Relay omits it and shows
-a diagnostic rather than silently discarding requested report evidence.
-An uploaded report is not proof that a saved pipeline ran it.
+Select an uploaded Robot XML report and use **Search locally** for literal,
+case-insensitive matching across test names, keyword names, test-section text,
+suite setup/teardown and suite status messages.
+Results are paginated and contain the test/section IDs, suite path and a bounded
+excerpt. A search result may be a passing test; selecting it does not send anything
+to AI. A separate checkbox approves sharing selected test sections.
 
-A maximum of four model rounds, 20 failures or test sections per page, a cumulative
-model-input budget and the existing request deadline bound work. Report coverage is
-partial: the UI counts distinct failure names listed to the model, not tests fully
-investigated. Once the model requests test details, previously listed names are
-removed from its next context to reserve budget; their IDs and redacted snapshot
-remain server-side for authorization and freshness checks. When bounds prevent an answer, Relay reports an error and asks for a
-narrower request. Long records still require manual continuation. A model can select
-only failures previously listed in the same request, not arbitrary paths, files or
-other conversations. Every read checks the attachment scope and hash. The answer is
-not a verified root cause, and citation membership does not establish correctness.
-Redaction is best effort; inspect sensitive data before sharing.
+For AI discovery, check “Let AI search this report” for the next message. This
+explicitly allows searching names, keywords and logs of passing as well as failing
+tests. Existing API clients that only send `share: true` retain failure discovery;
+`search_all: true` is required for the broader search operation. Search results
+are discovery, not citable evidence: the model must read a discovered test section
+before citing it. Scope, attachment hash and redacted search snapshots are checked
+again throughout the request. The UI trace reports counts and offsets, not raw
+queries. The same search and suite parsers are available for saved-run Robot evidence. A
+saved run may share its report with AI after explicit consent; run identity, artifact
+hash and retention are rechecked, and manual-upload association remains operator-
+asserted rather than provider-verified.
 
-This first slice cannot combine automatic report retrieval with original-source
-retrieval or manual report selection in the same request. Disable source sharing
-before using it. The model uses structured report operations through the existing
-provider output; there is no background investigation job, task-resume approval,
-report-wide text search, suite setup/teardown retrieval or automatic full-report
-coverage. Those remain follow-up work under #45.
+Automatic discovery may be combined with separately approved original-source
+sharing; source configuration, identities, model-round and input limits still
+apply. A source-enabled request uses at most the configured source model rounds
+(default three; configurable up to twelve), so a complex investigation may require a narrower request.
+Manual report selection and automatic discovery remain mutually exclusive.
+Ordinary report citations apply to the latest test detail. Up to four earlier test or
+suite pages, with at most five sections each, may be retained and cited using
+separate history handles; omitted pages and sections are disclosed. Search does not
+establish report completeness, deployed behavior, flaky status or root cause.
+Redaction is best effort and uploaded reports are not verified pipeline evidence.
+With explicit `include_suites: true` consent, the model can list suites and read
+setup/teardown sections for discovered suite IDs. Suite citations are validated
+separately from test citations. Suite status may reflect a parent failure and must
+not be treated as independent proof of every child failure. Existing API requests
+without this consent cannot send suite content. For long test sections the model can request the offered next text offset within
+the same request; Relay rechecks the redacted text hash before sharing. Only the
+latest detail or continuation uses ordinary report citations; retained earlier
+evidence uses separate history citations. Broader coverage remains follow-up work under #45.
+
+## Compare two uploaded reports
+
+Select an earlier and later XML attachment in the same conversation. Local
+comparison pairs only unique, nonempty suite/test paths; ambiguous duplicates and
+unmatched tests are not guessed. Totals cover all unique matched pairs, while
+individual results are paginated. The local view is not shared with AI. A separate
+one-request checkbox shares the selected page and aggregate counts; comparison
+citations are restricted to shared pair IDs. Hashes, deletion and redaction are
+checked before and after model calls.
+
+These files have unverified pipeline, revision, environment and attempt associations.
+Matching names do not prove comparable runs. Fail-to-pass is an observed change,
+not proof of flakiness or root cause. Saved-run history comparison, automatically
+verified comparability and historical repeated-run analysis remain follow-ups.
+
+## Guided investigation task approval
+
+In guided mode, the message and eligible attachment, selected-run, related-run
+and registered-source metadata can be sent to the configured model for planning.
+File contents are not sent during planning. The model may propose report, reference,
+comparison and source capabilities; the server validates every resource and the
+operator reviews the scopes, hashes, purposes, provider and expiration before approval.
+The approval is bound to the task, conversation, request, resource versions, run
+identity and model recipient. A local model gateway may forward content upstream.
+
+For registered sources, the first approval permits reading the chosen source locally
+or from its configured provider. Relay then shows the prepared file hashes and requires
+a second approval before source content is shared with AI. Changed files, source
+configuration, provider, resource hash or redaction invalidate the task rather than
+silently expanding permission. Denial or revocation prevents subsequent sharing and
+results are discarded when access is revoked during model execution.
+
+Pending tasks can be retrieved after refresh. Approval is claimed atomically and
+repeated approval does not run the task twice. If an in-flight task is interrupted,
+its lease expires and the operator must create and approve a new task; it is never
+automatically replayed. Approval expires after 15 minutes. Guided report capabilities request up to eight model
+rounds, 300,000 serialized input bytes and 120 seconds; the card displays these limits.
+Configured source limits can reduce them. Task messages, decisions
+and redacted results are kept in the local SQLite database (restricted to owner access)
+for up to seven days after expiration, with lazy cleanup. This is a local single-user
+workflow, not multi-tenant authorization.
+
+Original sources must be registered and eligible for the selected project, SUT and
+explicit environment. Saved-run report associations are operator-asserted. The model
+sees only bounded candidate metadata during planning and cannot access arbitrary
+paths, execute pipelines, change files or grant itself permissions.
+
+For two saved-run Robot artifacts, comparison also checks recorded project,
+repository, framework, pipeline, SUT, branch, commit, environment and parameter
+sets. Differences or missing fields are disclosed without exposing parameter
+values. Trigger-attempt order is shown separately and does not verify report
+chronology. A `suspected_flaky` classification is permitted only for a cited
+PASS/FAIL pair across two distinct runs with matching recorded metadata and a
+cited shared failure detail from the selected run. Even then, manually uploaded
+report association is operator-asserted, retry/attempt history is unverified and
+the result remains a hypothesis requiring operator verification. A single failure
+or incompatible/unknown metadata cannot support that classification.

@@ -17,7 +17,9 @@ Choose a model available to your account that supports strict Structured Outputs
 
 ## Workflow
 
-Check **Send chat…to AI** to enable natural-language messages. The disclosure covers the message, up to eight recent conversation turns, enabled project IDs/frameworks/allowed branches/pipeline parameter catalogs, current context, and the selected run's report summary. Repository URLs, credentials, raw report bytes, console logs, and files are not sent. Project IDs and parameter values may themselves be sensitive: review your configuration before opting in.
+For report search, saved-run comparison, evidence coverage and guided task approvals, see [report investigation and approvals](report-sections.md).
+
+Check **Send chat…to AI** to enable natural-language messages. The disclosure covers the message, up to eight recent conversation turns, enabled project IDs/frameworks/allowed branches/pipeline parameter catalogs, current context, and the selected run's report summary. Credentials and raw files are not sent by the base chat setting. Separately approved report, reference, comparison and source excerpts may be sent as described below. Project IDs and parameter values may themselves be sensitive: review your configuration before opting in.
 
 By default, run analysis sends statuses, aggregate counts, artifact IDs/availability/parse status/manual association, and whether attempts are reported. Failure names and messages are included by default. The **Include failure names/messages** setting can be disabled independently; when enabled it includes at most twenty failures, with redaction before truncation. Redaction masks known environment secrets, secret-bearing fields/assignments, bearer credentials, private key blocks, URLs, emails, and phone-like numbers. This is best-effort minimization, not a guarantee that arbitrary business information or all PII is removed. Inspect sensitive reports before using AI. Both sharing settings default to on and persist in browser local storage; an explicit off preference survives reload and run switching. Disabling general sharing prevents AI requests. These settings do not authorize pipeline actions.
 
@@ -25,9 +27,9 @@ AI can clarify a request, propose one configured selection, analyze the selected
 
 Observed pipeline/report facts are rendered separately from model guidance. Hypotheses are explicitly unverified and must reference available parsed artifacts for that selected run; missing or expired evidence cannot support citations. Attempt counts remain unknown when the source does not report them. Bug reports remain reviewable drafts; nothing is published automatically. Citation validation checks artifact ownership/availability, not whether a model's interpretation is semantically correct.
 
-Uploaded Robot reports show the containing suite path for each failure and shared test detail. Suite names are redacted before model sharing; paths are bounded and truncation is shown. Test IDs remain necessary when names or paths are identical. Suite setup/teardown outside tests is not yet inspected.
+Uploaded Robot reports show the containing suite path for each failure and shared test detail. Suite names are redacted before model sharing; paths are bounded and truncation is shown. Test IDs remain necessary when names or paths are identical. Suite setup and teardown are available through separately approved report investigation.
 
-Conversation continuity uses the existing local browser history. Only the current page's latest AI suggestion card is held in memory; raw report text is not persisted by this feature. Treat model prose as untrusted guidance and verify it against the report links.
+Ordinary conversation continuity uses local browser history. Guided investigation tasks store their messages, approval metadata and redacted results in the local backend; raw attachment files remain in their existing scoped stores. Treat model prose as untrusted guidance and verify it against the report links.
 
 ## Bounds and failure behavior
 

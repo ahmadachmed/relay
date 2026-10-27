@@ -64,6 +64,7 @@ export type Evidence = {
     availability: string;
     parse_status: string;
     source?: string;
+    sha256?: string;
     association?: string;
     error?: string | null;
   }[];

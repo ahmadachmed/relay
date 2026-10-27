@@ -104,6 +104,36 @@ class ConversationFiles:
             raise PlanError("not_found", "Attachment not found in this conversation", 404)
         return dict(inspect_robot(row[0], row[1], offset, limit, test_id, sanitize, section_id, text_offset), attachment_id=attachment_id)
 
+    def compare_reports(self, conversation_id, first_id, first_sha, second_id, second_sha, offset=0, limit=20, sanitize=None):
+        from .report_compare import compare_robot
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            rows = db.execute("SELECT id,body,sha256 FROM conversation_files WHERE conversation_id=? AND id IN (?,?) AND created_at>=?", (conversation_id, first_id, second_id, time.time()-RETENTION)).fetchall()
+        files = {row[0]:row for row in rows}
+        if first_id not in files or second_id not in files:
+            raise PlanError('not_found', 'Attachment not found in this conversation', 404)
+        if files[first_id][2] != first_sha or files[second_id][2] != second_sha:
+            raise PlanError('attachment_changed', 'A selected report changed. Select it again.', 409)
+        return dict(compare_robot(files[first_id][1], files[second_id][1], first_sha, second_sha, offset, limit, sanitize), first_attachment_id=first_id, second_attachment_id=second_id)
+
+    def suites(self, conversation_id, attachment_id, offset=0, limit=20, suite_id=None, sanitize=None):
+        from .suite_sections import inspect_suites
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            row = db.execute("SELECT body,sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?", (conversation_id, attachment_id, time.time()-RETENTION)).fetchone()
+        if not row:
+            raise PlanError('not_found', 'Attachment not found in this conversation', 404)
+        return dict(inspect_suites(row[0], row[1], offset, limit, suite_id, sanitize), attachment_id=attachment_id)
+
+    def search_report(self, conversation_id, attachment_id, query, offset=0, limit=20, sanitize=None, include_suites=False):
+        from .report_search import search_robot
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            row = db.execute("SELECT body,sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?", (conversation_id, attachment_id, time.time()-RETENTION)).fetchone()
+        if not row:
+            raise PlanError('not_found', 'Attachment not found in this conversation', 404)
+        return dict(search_robot(row[0], row[1], query, offset, limit, sanitize, include_suites), attachment_id=attachment_id)
+
     def reference(self, conversation_id, attachment_id, expected_hash, query, sanitize):
         """Read and rank bounded reference sections after explicit model sharing consent."""
         import json

@@ -118,8 +118,9 @@ knowledge proposals derived from failure evidence still require a saved run.
 
 ## Budgets and model loop
 
-The optional `limits` object in source configuration can lower these ceilings;
-values above the ceilings are rejected. Limits are captured for each request.
+The optional `limits` object can adjust these bounded settings; values above
+the documented maxima are rejected. Limits are captured for each request.
+For guided tasks they are shown on the approval card and bound to the grant.
 
 | Setting | Default / maximum |
 |---|---:|
@@ -128,9 +129,9 @@ values above the ceilings are rejected. Limits are captured for each request.
 | `sections` | 256 indexed sections |
 | `candidates` | 8 per search |
 | `context_bytes` | 20,000 serialized redacted section bytes |
-| `model_rounds` | 3 model calls |
-| `model_input_bytes` | 100,000 cumulative serialized input bytes (minimum 48,000) |
-| `wall_seconds` | 40 seconds for retrieval + model rounds |
+| `model_rounds` | 3 default, 12 maximum |
+| `model_input_bytes` | 100,000 default, 600,000 maximum (minimum 48,000) |
+| `wall_seconds` | 40 default, 300 maximum for retrieval + model rounds |
 
 The existing context ceiling remains 48,000 bytes per call, with a 64,000-byte
 serialized provider-payload ceiling including instructions, output schema and JSON
