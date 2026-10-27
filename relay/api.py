@@ -149,6 +149,10 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     async def assistant_chat(body: ChatRequest):
         return await assistant.chat(body)
 
+    @app.post('/api/conversations')
+    def create_conversation():
+        return conversation_files.create()
+
     @app.get('/api/conversations/{conversation_id}/attachments')
     def list_conversation_attachments(conversation_id: str):
         return conversation_files.list(conversation_id)

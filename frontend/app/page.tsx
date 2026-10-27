@@ -189,17 +189,32 @@ export default function Workspace() {
   const conversationKey = selected || "planning";
   const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
   type ConversationFile = {id:string;filename:string;size:number;status:string};
-  const [attachments,setAttachments]=useState<ConversationFile[]>([]);
+  const [attachmentScope,setAttachmentScope]=useState("");
+  const [scopeGeneration,setScopeGeneration]=useState(0);
+  const [attachmentMap,setAttachmentMap]=useState<Record<string,ConversationFile[]>>({});
+  const attachments=attachmentMap[attachmentScope] || [];
   const [attachmentError,setAttachmentError]=useState("");
   const [attachmentBusy,setAttachmentBusy]=useState(false);
   const attachmentInput=useRef<HTMLInputElement>(null);
-  useEffect(()=>{let live=true;void api<ConversationFile[]>(`/api/conversations/${conversationKey}/attachments`).then(v=>{if(live)setAttachments(v);}).catch(e=>{if(live)setAttachmentError(errorText(e));});return()=>{live=false;};},[conversationKey]);
+  useEffect(()=>{
+    let live=true;setAttachmentScope("");setAttachmentError("");
+    async function load(){
+      try {
+        let scope=storage.get(`attachment-scope-${conversationKey}`);
+        let files:ConversationFile[]=[];
+        if(scope){try{files=await api<ConversationFile[]>(`/api/conversations/${scope}/attachments`);}catch{scope=null;}}
+        if(!scope){const created=await api<{id:string}>("/api/conversations",{method:"POST"});scope=created.id;}
+        if(live){storage.set(`attachment-scope-${conversationKey}`,scope);setAttachmentMap(old=>({...old,[scope!]:files}));setAttachmentScope(scope);}
+      }catch(e){if(live)setAttachmentError(errorText(e));}
+    }
+    void load();return()=>{live=false;};
+  },[conversationKey,scopeGeneration]);
   async function attachFiles(files:FileList|null){
-    if(!files?.length)return;setAttachmentBusy(true);setAttachmentError("");
-    try{for(const file of Array.from(files)){const item=await api<ConversationFile>(`/api/conversations/${conversationKey}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});setAttachments(old=>old.some(x=>x.id===item.id)?old:[...old,item]);}}
+    if(!files?.length||!attachmentScope)return;const scope=attachmentScope;setAttachmentBusy(true);setAttachmentError("");
+    try{for(const file of Array.from(files)){const item=await api<ConversationFile>(`/api/conversations/${scope}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).some(x=>x.id===item.id)?old[scope]:[...(old[scope]||[]),item]}));}}
     catch(e){setAttachmentError(errorText(e));}finally{setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
-  async function removeAttachment(id:string){try{await api(`/api/conversations/${conversationKey}/attachments/${id}`,{method:"DELETE"});setAttachments(old=>old.filter(x=>x.id!==id));}catch(e){setAttachmentError(errorText(e));}}
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -745,6 +760,7 @@ export default function Workspace() {
   }
   function sendCommand(event: React.FormEvent) {
     event.preventDefault();
+    if (busy || attachmentBusy || aiLock.current || actionLock.current || previewLock.current) return;
     const text = command.trim();
     if (!text) return;
     setCommand("");
@@ -801,6 +817,8 @@ export default function Workspace() {
           disabled={Boolean(busy)}
           onClick={() => {
             setAiError(null);
+            storage.set("attachment-scope-planning", "");
+            setScopeGeneration(old=>old+1);
             setSelected("");
             storage.set("selected", "");
             setRun(null);
@@ -1523,7 +1541,7 @@ export default function Workspace() {
           <form className="composer" onSubmit={sendCommand}>
             <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError}</span>}</div>
             <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(e.target.files)}/>
-            <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
+            <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy||!attachmentScope} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">
               Structured command
             </label>
