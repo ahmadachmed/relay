@@ -137,7 +137,7 @@ def redact(value):
     value = re.sub(r'(?i)\bBearer\s+[^\s"<>]+', 'Bearer [REDACTED]', value)
     value = re.sub(r'(?i)(["\']?(?:password|secret|token|api[_-]?key|authorization|cookie|otp)["\']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[^\s,;]+)', r'\1[REDACTED]', value)
     value = re.sub(r'https?://[^\s<>"\']+', '[URL]', value)
-    value = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[EMAIL]', value)
+    value = re.sub(r'(?<![\w.+-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[EMAIL]', value)
     value = re.sub(r'(?<!\w)\+?\d[\d ()-]{7,}\d(?!\w)', '[NUMBER]', value)
     return value
 
@@ -429,12 +429,11 @@ class Assistant:
             if request.report_attachment:
                 ref = request.report_attachment
                 report = await asyncio.to_thread(self.conversation_files.report, ref.conversation_id, ref.attachment_id,
-                                                 ref.offset, 20, ref.test_id)
+                                                 ref.offset, 20, ref.test_id, redact)
                 if report['sha256'] != ref.sha256:
                     raise PlanError('attachment_changed', 'The selected attachment changed. Select it again.', 409)
                 # Redact free text, preserving opaque IDs and the original hash for provenance.
-                report_shared = {**report, 'test_id': ref.test_id, 'test': {**redact(report['test']), 'id': report['test']['id']},
-                    'items': [{**redact(item), 'section_id': item['section_id']} for item in report['items']]}
+                report_shared = {**report, 'test_id': ref.test_id}
                 context['report_attachment'] = report_shared
             # Optional knowledge never crowds out the base report/chat context.
             bundles = [context.get('project_knowledge'), context.get('sut_knowledge')]
@@ -471,6 +470,15 @@ class Assistant:
                 for key in ('knowledge', 'sut_knowledge'):
                     if facts and facts.get(key) is not None:
                         facts[key] = {'sources': [], 'diagnostics': ['Knowledge omitted to fit input budget; analysis used report/chat context only.']}
+            if report_shared:
+                # Reserve room for source metadata and the final JSON framing. Drop
+                # only complete records; citations may refer solely to retained IDs.
+                while report_shared['items'] and len(json.dumps(context).encode()) > 44_000:
+                    report_shared['items'].pop()
+                consumed = report_shared['offset'] + len(report_shared['items'])
+                report_shared['next_offset'] = consumed if consumed < report_shared['total'] else None
+                if not report_shared['items'] and report_shared['offset'] < report_shared['total']:
+                    raise PlanError('ai_context_limit', 'No report section fits the remaining AI input budget. Reduce other context.', 413)
             if len(json.dumps(context).encode()) > 48_000:
                 raise PlanError('ai_context_limit', 'Context exceeds the AI input budget. Reduce the added context, configured catalog or message.', 413)
             session = None

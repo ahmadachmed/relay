@@ -11,7 +11,8 @@ MAX_DEPTH = 64
 TEXT_LIMIT = 2000
 
 
-def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
+def inspect_robot(body, sha, offset=0, limit=20, test_id=None, sanitize=None):
+    clean = sanitize or (lambda value: value)
     if len(body) > MAX_REPORT_BYTES:
         raise PlanError('report_limit', 'Report exceeds 10 MB.', 413)
     tests, records, stack = [], [], []
@@ -29,20 +30,21 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
                 if element.tag == 'test':
                     if current is not None:
                         raise PlanError('invalid_report', 'Nested tests are unsupported.', 422)
-                    current = {'id': str(len(tests)), 'name': element.get('name', '')[:300], 'status': 'UNKNOWN'}
+                    current = {'id': str(len(tests)), 'name': clean(element.get('name', ''))[:300], 'status': 'UNKNOWN'}
                     records = []
             else:
                 if current is not None:
                     if element.tag == 'status' and len(stack) > 1 and stack[-2] == 'test':
-                        current['status'] = element.get('status', 'UNKNOWN')
+                        current['status'] = clean(element.get('status', 'UNKNOWN'))
                     if current['id'] == test_id and element.tag in ('kw', 'msg', 'status', 'arg'):
-                        value = element.text or ''
+                        original = element.text or ''
+                        value = clean(original)
                         records.append({'section_id': str(len(records)), 'kind': element.tag,
-                                        'depth': len(stack), 'name': element.get('name', '')[:300],
-                                        'text': value[:TEXT_LIMIT], 'truncated': len(value) > TEXT_LIMIT,
-                                        'status': element.get('status') if element.tag == 'status' else None,
-                                        'type': element.get('type') if element.tag == 'kw' else None,
-                                        'level': element.get('level') if element.tag == 'msg' else None})
+                                        'depth': len(stack), 'name': clean(element.get('name', ''))[:300],
+                                        'text': value[:TEXT_LIMIT], 'truncated': len(original) > TEXT_LIMIT or len(value) > TEXT_LIMIT,
+                                        'status': clean(element.get('status', '')) if element.tag == 'status' else None,
+                                        'type': clean(element.get('type', '')) if element.tag == 'kw' and element.get('type') is not None else None,
+                                        'level': clean(element.get('level', '')) if element.tag == 'msg' and element.get('level') is not None else None})
                     if element.tag == 'test':
                         if current['id'] == test_id:
                             selected = records

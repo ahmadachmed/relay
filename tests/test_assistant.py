@@ -604,3 +604,39 @@ def test_deleted_attachment_during_model_call_discards_response(harness):
     app.state.assistant.provider = DeleteDuringCall()
     response = post(client, report_attachment=ref)
     assert response.status_code == 404
+
+
+def test_report_redacts_before_truncation_including_names(harness, monkeypatch):
+    app, client, fake = harness
+    secret = 'private-key-' + 'A' * 140
+    monkeypatch.setenv('RELAY_TEST_SECRET', secret)
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="' + 'x'*250 + secret + '"><kw name="' + 'y'*250 + secret + '"><msg>' + 'z'*1900 + secret + '</msg><status status="FAIL"/></kw><status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    assert 'private-key-' not in json.dumps(fake.calls[-1]['report_attachment'])
+    assert '[REDACTED]' in json.dumps(fake.calls[-1]['report_attachment'])
+
+
+def test_report_unicode_fits_budget_and_citations_only_cover_included_sections(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="x">' + ('<msg>' + '漢'*2000 + '</msg>')*20 + '<status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    shared = result.json()['report_shared']
+    assert 0 < len(shared['items']) < 20
+    assert shared['next_offset'] == len(shared['items'])
+    assert len(json.dumps(fake.calls[-1]).encode()) <= 48000
+    fake.result = answer(action='answer', report_citations=[{'section_id':str(shared['next_offset']), 'claim':'Not shared'}])
+    assert post(client, report_attachment=ref).status_code == 502
+    fake.result = answer()
+    next_page = post(client, report_attachment={**ref, 'offset':shared['next_offset']})
+    assert next_page.status_code == 200
+    assert next_page.json()['report_shared']['items'][0]['section_id'] == str(shared['next_offset'])

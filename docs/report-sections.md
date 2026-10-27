@@ -39,7 +39,7 @@ The response displays the redacted records provided to the model and coverage so
 users can inspect the basis of the answer. Report citations are accepted only for section IDs shared with the model in that
 request; membership does not validate the meaning of a claim. Existing saved-run classification and its
 citations still require saved-run evidence; report attachments alone do not enable
-that flow. Long records remain truncated at 2,000 characters; use section offset to
+that flow. Report text and names are redacted before truncation. Records may be omitted to fit the serialized AI input budget; the returned next offset identifies the first omitted section. Long records remain truncated at 2,000 characters; use section offset to
 move through records, not within a long record. Suite-level setup/teardown and
 unread records remain absent. Model-chosen retrieval, task-scoped resumable approval,
 semantic verification of citations, full long-message retrieval, and other attachment
