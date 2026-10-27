@@ -426,7 +426,9 @@ platform or environment replaces the proposed selection and requires a new previ
 For cancellation choose cancel only when the user explicitly requests stopping the selected run;
 the UI will ask for confirmation. Analyze only the selected run snapshot. Facts are rendered by the
 application separately; message is guidance, not an assertion of observed results. Hypotheses must be
-labelled uncertain and cite only artifact IDs supplied in facts. Missing reports, truncation and
+labelled uncertain and cite only artifact IDs supplied in facts. For an uploaded report without a
+selected run, hypotheses may use an empty artifact_ids list only when report_citations cite the
+shared report evidence supporting them. Missing reports, truncation and
 unknown attempt counts limit conclusions. analysis_ready means usable parsed test results exist,
 not that a background model job is running; background_analysis_pending is false. Never tell the
 user to wait for analysis readiness. Use analysis_limitations for actionable next steps. Partial
@@ -1202,7 +1204,11 @@ class Assistant:
             if answer.action in ('analyze', 'cancel') and not request.run_id:
                 raise PlanError('ai_missing_run', 'Select a run first.', 422)
             allowed = {a['id'] for a in (facts or {}).get('artifacts', []) if a.get('id') and a['availability'] == 'available' and a['parse_status'] == 'parsed'}
-            if any(not h.artifact_ids or not set(h.artifact_ids) <= allowed for h in answer.hypotheses):
+            uploaded_hypothesis_evidence = (answer.action == 'answer' and request.run_id is None
+                and report_shared and report_shared.get('scope') == 'operator_uploaded'
+                and bool(answer.report_citations))
+            if any((not h.artifact_ids and not uploaded_hypothesis_evidence)
+                   or not set(h.artifact_ids) <= allowed for h in answer.hypotheses):
                 raise PlanError('ai_invalid_citation', 'Model suggested an unsupported evidence reference.', 502)
             classification = answer.classification
             if classification:

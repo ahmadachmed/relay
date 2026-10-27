@@ -1221,14 +1221,20 @@ def test_planning_can_classify_cited_uploaded_failure_but_not_unshared_evidence(
         async def answer(self,context):
             self.calls+=1
             if self.calls==1:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
-            return answer(action='answer',classification={'category':'suspected_product_bug','reason':'HTTP 500','artifact_ids':[],'verification':'Check service logs'},report_citations=[{'section_id':'0','claim':'HTTP 500'}])
+            return answer(action='answer',hypotheses=[{'text':'The service may have failed; verify logs.','artifact_ids':[]}],classification={'category':'suspected_product_bug','reason':'HTTP 500','artifact_ids':[],'verification':'Check service logs'},report_citations=[{'section_id':'0','claim':'HTTP 500'}])
     app.state.assistant.provider=Provider()
     response=post(client,auto_report=ref)
     assert response.status_code==200,response.text
     assert response.json()['answer']['classification']['category']=='suspected_product_bug'
+    assert response.json()['answer']['hypotheses'][0]['artifact_ids']==[]
     assert response.json()['report_shared']['scope']=='operator_uploaded'
     class Invalid:
         async def answer(self,context):
             return answer(action='answer',classification={'category':'suspected_product_bug','reason':'No evidence','artifact_ids':[],'verification':'Check'})
     app.state.assistant.provider=Invalid()
+    assert post(client).status_code==502
+    class InvalidHypothesis:
+        async def answer(self,context):
+            return answer(action='answer',hypotheses=[{'text':'Unsupported','artifact_ids':[]}])
+    app.state.assistant.provider=InvalidHypothesis()
     assert post(client).status_code==502
