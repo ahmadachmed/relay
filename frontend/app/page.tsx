@@ -195,6 +195,7 @@ export default function Workspace() {
   const attachments=attachmentMap[attachmentScope] || [];
   const [attachmentError,setAttachmentError]=useState("");
   const [attachmentBusy,setAttachmentBusy]=useState(false);
+  const [uploadRetry,setUploadRetry]=useState<{scope:string;files:File[]}|null>(null);
   const attachmentInput=useRef<HTMLInputElement>(null);
   useEffect(()=>{
     let live=true;setAttachmentScope("");setAttachmentError("");
@@ -209,10 +210,18 @@ export default function Workspace() {
     }
     void load();return()=>{live=false;};
   },[conversationKey,scopeGeneration]);
-  async function attachFiles(files:FileList|null){
-    if(!files?.length||!attachmentScope)return;const scope=attachmentScope;setAttachmentBusy(true);setAttachmentError("");
-    try{for(const file of Array.from(files)){const item=await api<ConversationFile>(`/api/conversations/${scope}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).some(x=>x.id===item.id)?old[scope]:[...(old[scope]||[]),item]}));}}
-    catch(e){setAttachmentError(errorText(e));}finally{setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
+  async function attachFiles(files:File[], scope=attachmentScope){
+    if(!files.length||!scope)return;
+    setAttachmentBusy(true);setAttachmentError("");setUploadRetry(null);
+    let index=0;
+    try {
+      for(;index<files.length;index++){
+        const file=files[index];
+        const item=await api<ConversationFile>(`/api/conversations/${scope}/attachments?filename=${encodeURIComponent(file.name)}`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream"},body:file});
+        setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).some(x=>x.id===item.id)?old[scope]:[...(old[scope]||[]),item]}));
+      }
+    } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
+    finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
   async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
@@ -1539,8 +1548,8 @@ export default function Workspace() {
         <div className="composer-wrap">
 
           <form className="composer" onSubmit={sendCommand}>
-            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified, not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>setScopeGeneration(old=>old+1)}>Retry</button></span>}</div>
-            <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(e.target.files)}/>
+            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified, not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>{if(uploadRetry?.scope===attachmentScope)void attachFiles(uploadRetry.files,uploadRetry.scope);else setScopeGeneration(old=>old+1);}}>Retry</button></span>}</div>
+            <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(Array.from(e.target.files||[]))}/>
             <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy||!attachmentScope} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">
               Structured command
