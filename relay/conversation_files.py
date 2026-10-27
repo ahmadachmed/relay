@@ -103,3 +103,86 @@ class ConversationFiles:
         if not row:
             raise PlanError("not_found", "Attachment not found in this conversation", 404)
         return dict(inspect_robot(row[0], row[1], offset, limit, test_id, sanitize, section_id, text_offset), attachment_id=attachment_id)
+
+    def reference(self, conversation_id, attachment_id, expected_hash, query, sanitize):
+        """Read and rank bounded reference sections after explicit model sharing consent."""
+        import json
+        import subprocess
+        import sys
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            row = db.execute('SELECT filename,body,sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?', (conversation_id, attachment_id, time.time()-RETENTION)).fetchone()
+        if not row:
+            raise PlanError('not_found', 'Attachment not found in this conversation', 404)
+        filename, body, sha = row
+        if sha != expected_hash:
+            raise PlanError('attachment_changed', 'Reference attachment changed.', 409)
+        suffix = filename.rsplit('.', 1)[-1].lower()
+        if suffix not in ('txt', 'md', 'pdf', 'docx'):
+            raise PlanError('document_format', 'Choose a TXT, Markdown, PDF or DOCX document.', 415)
+        try:
+            proc = subprocess.run([sys.executable, '-m', 'relay.document_worker', suffix], input=body,
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, check=False)
+            if proc.returncode or len(proc.stdout) > 1_500_000:
+                raise ValueError()
+            data = json.loads(proc.stdout)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            raise PlanError('document_limit', 'Document extraction failed or exceeded resource limits.', 422) from None
+        if data.get('error'):
+            code = data['error']
+            messages = {'document_no_text':'No extractable text; scanned PDFs require OCR, which is not supported.',
+                        'document_encrypted':'Encrypted PDF documents are not supported.',
+                        'document_too_large':'Document exceeds the 5 MB extraction limit.',
+                        'document_limit':'Document exceeds extraction limits.',
+                        'document_format':'File content does not match a supported document format.',
+                        'document_invalid':'Document is corrupt or cannot be extracted.'}
+            raise PlanError(code, messages.get(code, 'Document could not be extracted.'), 422)
+        # Redact complete text before selecting/truncating to avoid leaking secret fragments.
+        words = {w.lower() for w in re.findall(r'\w{3,}', query, flags=re.UNICODE)[:32]}
+        sections = []
+        # PEM blocks can span lines, paragraphs or pages. Redact every affected
+        # section before ranking, so no fragment can reach the model alone.
+        parts = data['sections']
+        joined = '\n'.join(part['text'] for part in parts)
+        spans = [m.span() for m in re.finditer(r'-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----', joined)]
+        position_in_document = 0
+        for index, part in enumerate(parts):
+            end = position_in_document + len(part['text'])
+            sensitive = any(start < end and stop > position_in_document for start, stop in spans)
+            text = '[REDACTED]' if sensitive else sanitize(part['text'])
+            position_in_document = end + 1
+            lowered = text.lower()
+            terms = set(re.findall(r'\w{3,}', lowered, flags=re.UNICODE))
+            matched = words & terms
+            positions = [lowered.find(word) for word in matched]
+            position = min(positions) if positions else 0
+            if positions and len(lowered) != len(text):
+                # Unicode lowercase can expand one code point (e.g. U+0130).
+                # Translate the match offset back to the original redacted string.
+                consumed = 0
+                for char_index, char in enumerate(text):
+                    if consumed + len(char.lower()) > position:
+                        position = char_index
+                        break
+                    consumed += len(char.lower())
+            start = max(0, position - 250) if positions and len(text) > 1500 else 0
+            sections.append({'id': str(index), 'location': part['location'], 'text': text[start:start+1500],
+                             'text_offset': start, 'truncated': start > 0 or start + 1500 < len(text), '_score': len(matched)})
+        ranked = sorted(sections, key=lambda item: (-item['_score'], int(item['id'])))[:3]
+        for item in ranked:
+            del item['_score']
+        return {'attachment_id': attachment_id, 'sha256': sha, 'format': suffix,
+                'sections': ranked, 'total_sections': len(sections),
+                'omitted_sections': max(0, len(sections)-len(ranked)),
+                'source': 'user_uploaded_unverified', 'extraction': 'text_only',
+                'non_text_pages': data.get('non_text_pages', []),
+                'limitations': ['Images and scanned content are not interpreted; OCR is not supported.']}
+
+    def require_reference(self, conversation_id, attachment_id, expected_hash):
+        self.validate_scope(conversation_id)
+        with self.execution.connect() as db:
+            row = db.execute('SELECT sha256 FROM conversation_files WHERE conversation_id=? AND id=? AND created_at>=?', (conversation_id, attachment_id, time.time()-RETENTION)).fetchone()
+        if not row:
+            raise PlanError('not_found', 'Attachment not found in this conversation', 404)
+        if row[0] != expected_hash:
+            raise PlanError('attachment_changed', 'Reference attachment changed.', 409)

@@ -49,7 +49,9 @@ type Context = {
 };
 type ReportPage = {sha256:string;total:number;offset:number;next_offset:number|null;items:{id:string;name:string;status:string}[]};
 type SharedReport = {attachment_id:string;sha256:string;test_id:string;test:{id:string;name:string;status:string};offset:number;total:number;next_offset:number|null;items:{section_id:string;kind:string;text:string;name:string;truncated:boolean;status?:string|null;text_offset:number;next_text_offset:number|null;text_sha256:string}[]};
+type ReferenceShared = {attachment_id:string;sha256:string;format:string;total_sections:number;omitted_sections:number;non_text_pages?:number[];sections:{id:string;location:string;text:string;truncated:boolean;text_offset?:number}[]};
 type AiReply = {
+  reference_shared?: ReferenceShared | null;
   auto_report?: {total_tests:number;total_failures:number;listed_failures:number;tests_with_sections_shared:number;offset:number;next_offset:number|null;coverage:string;budget_diagnostics?:string[];trace:{operation:string;offset:number;count:number;test_id:string|null}[]} | null;
   report_shared?: SharedReport | null;
   source_manifest?: SourceManifest | null;
@@ -58,6 +60,7 @@ type AiReply = {
   answer: {
     source_citations?: {handle:string;claim:string}[];
     report_citations?: {section_id:string;claim:string}[];
+    reference_citations?: {section_id:string;claim:string}[];
     missing_context?: string[];
     classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
     action: "clarify" | "propose" | "analyze" | "cancel" | "answer";
@@ -211,6 +214,9 @@ export default function Workspace() {
     const observer=new ResizeObserver(update); observer.observe(element);
     return()=>{observer.disconnect();document.documentElement.style.removeProperty('--relay-composer-height');};
   },[]);
+  const [referenceFile,setReferenceFile]=useState("");
+  const [shareReference,setShareReference]=useState(false);
+  useEffect(()=>{setReferenceFile("");setShareReference(false);},[attachmentScope]);
   const [reportFile,setReportFile]=useState("");
   const [reportPage,setReportPage]=useState<ReportPage|null>(null);
   const [reportOffset,setReportOffset]=useState(0);
@@ -256,7 +262,7 @@ export default function Workspace() {
     } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
     finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
-  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);}catch(e){setAttachmentError(errorText(e));}}
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);setReferenceFile(current=>current===id?"":current);setShareReference(false);}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -759,15 +765,20 @@ export default function Workspace() {
       aiLock.current = false; actionLock.current = false; setAiPendingConversation(null); setBusy("");
       setError("Disable original source sharing before using automatic report search."); return;
     }
-    const reportUsed = (shareReport && !!reportPage && !!reportTest && !!reportFile && !!attachmentScope) || autoUsed;
-    const reportAttachment = reportUsed && !autoUsed ? {conversation_id:attachmentScope, attachment_id:reportFile, sha256:reportPage!.sha256, test_id:reportTest, offset:sectionOffset, share:true, ...(reportChunk || {})} : null;
+    const manualReportUsed = shareReport && !!reportPage && !!reportTest && !!reportFile && !!attachmentScope;
+    const reference = attachments.find(file=>file.id===referenceFile);
+    const referenceUsed = shareReference && !!reference && !!attachmentScope;
+    const reportUsed = manualReportUsed || autoUsed || referenceUsed;
+    const referenceAttachment = referenceUsed ? {conversation_id:attachmentScope,attachment_id:reference!.id,sha256:reference!.sha256,share:true} : null;
+    const reportAttachment = manualReportUsed && !autoUsed ? {conversation_id:attachmentScope, attachment_id:reportFile, sha256:reportPage!.sha256, test_id:reportTest, offset:sectionOffset, share:true, ...(reportChunk || {})} : null;
     const autoAttachment = autoUsed ? {conversation_id:attachmentScope,attachment_id:reportFile,sha256:reportPage!.sha256,share:true} : null;
-    setShareReport(false);setAutoReport(false);
+    setShareReport(false);setAutoReport(false);setShareReference(false);
     try {
       const value = await post<AiReply>("/api/assistant/chat", {
         message: text,
         report_attachment: reportAttachment,
         auto_report: autoAttachment,
+        reference_attachment: referenceAttachment,
         propose_knowledge: proposeKnowledge,
         share_context: true,
         include_source_context: shareSources,
@@ -1068,7 +1079,7 @@ export default function Workspace() {
           </div>
           {aiError && (
             <div className="error-banner" role="alert">
-              {aiError.message} {aiError.reportUsed ? "Select the report and approve sharing again before resending the message." : "Retry sends this message to AI again; review sharing settings if needed."}
+              {aiError.message} {aiError.reportUsed ? "Select the attachments and approve sharing again before resending the message." : "Retry sends this message to AI again; review sharing settings if needed."}
               {!aiError.reportUsed && <button className="text-button" disabled={Boolean(busy) || !shareAi || !aiEnabled}
                 onClick={() => void askAi(aiError.text, aiError.proposeKnowledge)}>Retry AI message</button>}
               <button className="text-button" onClick={() => setAiError(null)}>Dismiss</button>
@@ -1110,6 +1121,7 @@ export default function Workspace() {
                 </div>
               </div>
               <div className="ai-body">
+                {aiReply.reference_shared && <section aria-label="Reference details shared with AI"><h3>Reference details shared with AI</h3><p>User-uploaded, unverified reference; not proof of deployed behavior. SHA-256 {aiReply.reference_shared.sha256}. {aiReply.reference_shared.omitted_sections} of {aiReply.reference_shared.total_sections} text sections not shared. {aiReply.reference_shared.non_text_pages?.length ? `No extractable text on PDF pages ${aiReply.reference_shared.non_text_pages.join(", ")}; OCR is not supported.` : "Images are not interpreted; OCR is not supported."} Citation membership does not verify the claim.</p><ul>{(aiReply.answer.reference_citations || []).map((citation,i)=><li key={i}><a href={`#reference-section-${citation.section_id}`}>Reference {citation.section_id}</a>: {citation.claim}</li>)}</ul><ul>{aiReply.reference_shared.sections.map(section=><li id={`reference-section-${section.id}`} key={section.id}>{section.location}{section.text_offset ? `, from character ${section.text_offset}` : ""}: {section.text}{section.truncated ? " [partial]" : ""}</li>)}</ul></section>}
                 {aiReply.auto_report && <section aria-label="Automatic report search"><h3>Automatic report search</h3><p>{aiReply.auto_report.total_failures} failed tests in {aiReply.auto_report.total_tests} total tests; {aiReply.auto_report.listed_failures} distinct failures listed to AI; sections shared from {aiReply.auto_report.tests_with_sections_shared} tests. {aiReply.auto_report.coverage} {(aiReply.auto_report.budget_diagnostics || []).join(" ")} {aiReply.auto_report.listed_failures < aiReply.auto_report.total_failures ? "Some failures were not listed." : ""}</p><ul>{(aiReply.auto_report.trace || []).map((step,i)=><li key={i}>{step.operation === "read_test" ? `Test ${step.test_id}: ${step.count} sections from ${step.offset}` : `Failure list: ${step.count} names from ${step.offset}`}</li>)}</ul></section>}
                 {aiReply.report_shared && <section aria-label="Report details shared with AI"><h3>Report details shared with AI</h3><p>User-uploaded file; association with a pipeline is unverified. Test {aiReply.report_shared.test_id}: {aiReply.report_shared.test.name} ({aiReply.report_shared.test.status}); SHA-256 {aiReply.report_shared.sha256}. Showing {aiReply.report_shared.items.length} of {aiReply.report_shared.total} sections, starting at {aiReply.report_shared.offset}. {aiReply.report_shared.next_offset !== null ? "More sections were not shared." : ""} A section may be truncated; citation membership does not validate AI claims.</p>{(aiReply.answer.report_citations || []).length > 0 && <ul aria-label="Report citations">{aiReply.answer.report_citations!.map((citation,i)=><li key={i}><a href={`#report-section-${citation.section_id}`}>Section {citation.section_id}</a>: {citation.claim}</li>)}</ul>}<ul>{aiReply.report_shared.items.map(item=><li id={`report-section-${item.section_id}`} key={item.section_id}>Section {item.section_id} · {item.kind} {item.name} {item.status || ""}: {item.text}{item.truncated ? " [partial]" : ""} (characters {item.text_offset ?? 0}–{(item.text_offset ?? 0) + Array.from(item.text).length}) {item.next_text_offset != null && aiReply.report_shared!.attachment_id===reportFile && aiReply.report_shared!.test_id===reportTest && aiReply.report_shared!.sha256===reportPage?.sha256 && <button type="button" onClick={()=>{setReportChunk({section_id:item.section_id,text_offset:item.next_text_offset!,text_sha256:item.text_sha256});setShareReport(false);}}>Use next part of section {item.section_id}</button>}</li>)}</ul></section>}
                 {aiReply.source_manifest && <SourceReferences key={aiReply.source_manifest.id} manifest={aiReply.source_manifest} citations={aiReply.answer.source_citations || []}/>}
@@ -1593,6 +1605,7 @@ export default function Workspace() {
         </div>
         <div className="composer-wrap" ref={composerWrap}>
 
+          {attachments.some(file=>/\.(txt|md|pdf|docx)$/i.test(file.filename)) && <section className="report-search-controls" aria-label="Optional reference for next AI message"><label>Reference document <select value={referenceFile} disabled={Boolean(busy)} onChange={e=>{setReferenceFile(e.target.value);setShareReference(false);}}><option value="">No reference document</option>{attachments.filter(file=>/\.(txt|md|pdf|docx)$/i.test(file.filename)).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>{referenceFile && <label><input type="checkbox" checked={shareReference} onChange={e=>setShareReference(e.target.checked)} /> Share up to three relevant sections from this document with the configured AI provider for the next message. Content may contain sensitive data; redaction is best effort.</label>}</section>}
           {attachments.some(file=>file.filename.toLowerCase().endsWith(".xml")) && <section className="report-search-controls" aria-label="Report context for next AI message">
             <label>Robot report <select value={reportFile} disabled={Boolean(busy)} onChange={e=>{setReportFile(e.target.value);setReportOffset(0);setSectionOffset(0);setShareReport(false);}}><option value="">Do not share a report</option>{attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>
             {reportError && <p role="alert">{reportError}</p>}
