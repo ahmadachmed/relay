@@ -18,6 +18,7 @@ from .source_context import SourceContext
 from .knowledge_proposals import DraftEdit, Approval, RollbackDraft, ProposalReference
 from .report_evidence import MAX_REPORT_BYTES
 from .conversation_files import ConversationFiles
+from .investigation_tasks import InvestigationTasks, TaskStart, TaskDecision
 from uuid import UUID
 from pydantic import model_validator
 from .providers import ProviderError
@@ -36,6 +37,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     conversation_files = ConversationFiles(execution)
     assistant = Assistant(registry, monitor, evidence_store)
     source_context = SourceContext(execution, monitor, registry)
+    investigation_tasks = InvestigationTasks(execution, assistant)
 
 
     @asynccontextmanager
@@ -56,6 +58,7 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     app.state.monitor = monitor
     app.state.assistant = assistant
     app.state.source_context = source_context
+    app.state.investigation_tasks = investigation_tasks
 
     @app.middleware('http')
     async def local_guard(request: Request, call_next):
@@ -153,6 +156,30 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
     def create_conversation():
         return conversation_files.create()
 
+    @app.post('/api/conversations/{conversation_id}/tasks')
+    def create_investigation_task(conversation_id: str, body: TaskStart):
+        return investigation_tasks.create(conversation_id, body)
+
+    @app.get('/api/conversations/{conversation_id}/tasks/{task_id}')
+    def get_investigation_task(conversation_id: str, task_id: str):
+        return investigation_tasks.get(conversation_id, task_id)
+
+    @app.post('/api/conversations/{conversation_id}/tasks/{task_id}/plan')
+    async def plan_investigation_task(conversation_id: str, task_id: str):
+        return await investigation_tasks.plan(conversation_id, task_id)
+
+    @app.post('/api/conversations/{conversation_id}/tasks/{task_id}/approve')
+    async def approve_investigation_task(conversation_id: str, task_id: str, body: TaskDecision):
+        return await investigation_tasks.approve(conversation_id, task_id, body)
+
+    @app.post('/api/conversations/{conversation_id}/tasks/{task_id}/cancel')
+    def cancel_unapproved_task(conversation_id: str, task_id: str):
+        return investigation_tasks.cancel_unapproved(conversation_id, task_id)
+
+    @app.post('/api/conversations/{conversation_id}/tasks/{task_id}/deny')
+    def deny_investigation_task(conversation_id: str, task_id: str, body: TaskDecision):
+        return investigation_tasks.deny(conversation_id, task_id, body)
+
     @app.get('/api/conversations/{conversation_id}/attachments')
     def list_conversation_attachments(conversation_id: str):
         return conversation_files.list(conversation_id)
@@ -231,6 +258,25 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
                 raise HTTPException(413, 'Report exceeds 10 MB')
             body.extend(chunk)
         return evidence_store.upload(run_id, report_path, bytes(body))
+
+    @app.post('/api/remote-runs/{run_id}/evidence/{artifact_id}/robot-report/compare')
+    def compare_saved_reports(run_id: str, artifact_id: str, body: SavedReportComparison):
+        return evidence_store.compare_saved_reports(run_id, artifact_id, body.first_sha256,
+            body.second_run_id, body.second_id, body.second_sha256, body.offset, body.limit)
+
+    @app.get('/api/remote-runs/{run_id}/evidence/{artifact_id}/robot-report')
+    def inspect_saved_report(run_id: str, artifact_id: str, offset: int = Query(default=0, ge=0, le=100000),
+                             limit: int = Query(default=20, ge=1, le=50), test_id: str | None = Query(default=None, max_length=10)):
+        return evidence_store.robot_report(run_id, artifact_id, offset, limit, test_id)
+
+    @app.post('/api/remote-runs/{run_id}/evidence/{artifact_id}/robot-report/search')
+    def search_saved_report(run_id: str, artifact_id: str, body: ReportSearch):
+        return evidence_store.search_robot_report(run_id, artifact_id, body.query, body.offset, body.limit, include_suites=True)
+
+    @app.get('/api/remote-runs/{run_id}/evidence/{artifact_id}/robot-report/suites')
+    def inspect_saved_suites(run_id: str, artifact_id: str, offset: int = Query(default=0, ge=0, le=100000),
+                             limit: int = Query(default=20, ge=1, le=50), suite_id: str | None = Query(default=None, max_length=10)):
+        return evidence_store.robot_suites(run_id, artifact_id, offset, limit, suite_id)
 
     @app.get('/api/remote-runs/{run_id}/evidence/{artifact_id}')
     def download_remote_evidence(run_id: str, artifact_id: str):
@@ -326,6 +372,15 @@ def create_app(config=None, data=None, registry_path=None, monitoring=True):
 
 class Message(BaseModel):
     message: str = Field(min_length=1, max_length=1000)
+
+
+class SavedReportComparison(Contract):
+    first_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    second_run_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    second_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    second_sha256: str = Field(pattern=r'^[a-f0-9]{64}$')
+    offset: int = Field(default=0, ge=0, le=100000)
+    limit: int = Field(default=20, ge=1, le=50)
 
 
 class ReportComparison(Contract):

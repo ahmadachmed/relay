@@ -118,3 +118,119 @@ def test_results_from_multiple_reports_have_distinct_ids(tmp_path):
     assert store.upload(run_id, 'android.xml', body)['id'] == artifacts[0]['id']
     restored = EvidenceStore(app.state.execution, app.state.monitor)
     assert [t['id'] for t in restored.summary(run_id)['tests']] == original_ids
+
+
+def test_saved_robot_report_search_reuses_parser_with_run_scope_and_expiry(tmp_path):
+    app,run_id,store=setup(tmp_path)
+    other=submitted(app.state.execution)['id']
+    report=b'<robot><suite name="API"><test name="Login"><msg>timeout</msg><status status="FAIL"/></test></suite></robot>'
+    artifact=store.upload(run_id,'output.xml',report)
+    with TestClient(app) as client:
+        url=f"/api/remote-runs/{run_id}/evidence/{artifact['id']}/robot-report"
+        listing=client.get(url).json()
+        assert listing['scope']=='saved_run' and listing['association']=='operator_asserted'
+        assert listing['items'][0]['suite_path']=='API'
+        match=client.post(url+'/search',json={'query':'timeout'}).json()['items'][0]
+        assert match['section_id']=='0' and match['test_id']=='0'
+        assert client.get(url,params={'test_id':'0'}).json()['items'][0]['text']=='timeout'
+        assert client.get(url.replace(run_id,other)).status_code==404
+        with app.state.execution.connect() as db: db.execute('UPDATE evidence SET expires_at=0')
+        assert client.get(url).status_code==410
+
+
+def test_saved_robot_report_ai_requires_matching_run_and_rechecks_retention(tmp_path,monkeypatch):
+    from relay.assistant import Answer
+    monkeypatch.setenv('RELAY_AI_ENABLED','1')
+    app,run_id,store=setup(tmp_path)
+    other=submitted(app.state.execution)['id']
+    body=b'<robot><suite name="API"><test name="Login"><msg>timeout</msg><status status="FAIL"/></test></suite></robot>'
+    artifact=store.upload(run_id,'output.xml',body)
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:
+                assert context['auto_report']['association']=='operator_asserted'
+                return Answer.model_validate({'action':'answer','message':'Investigate','selection':None,'hypotheses':[], 'bug_report_draft':None,
+                    'report_operations':[{'operation':'read_test','test_id':'0','offset':0}]})
+            assert context['report_attachment']['items'][0]['text']=='timeout'
+            return Answer.model_validate({'action':'answer','message':'Observed','selection':None,'hypotheses':[], 'bug_report_draft':None,
+                'report_citations':[{'section_id':'0','claim':'timeout'}]})
+    with TestClient(app) as client:
+        scope=client.post('/api/conversations').json()['id']
+        ref={'conversation_id':scope,'run_id':run_id,'artifact_id':artifact['id'],'sha256':artifact['sha256'],'share':True}
+        app.state.assistant.provider=Provider()
+        result=client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':run_id,'auto_report':ref})
+        assert result.status_code==200,result.text
+        assert result.json()['report_shared']['association']=='operator_asserted'
+        assert client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':other,'auto_report':ref}).status_code==422
+        assert client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':run_id,'auto_report':{**ref,'sha256':'0'*64}}).status_code==409
+        with app.state.execution.connect() as db: db.execute('UPDATE evidence SET expires_at=0')
+        assert client.post('/api/assistant/chat',json={'message':'Investigate','share_context':True,'run_id':run_id,'auto_report':ref}).status_code==410
+
+
+def test_saved_run_comparison_discloses_metadata_and_operator_association(tmp_path):
+    app,first_run,store=setup(tmp_path)
+    second_run=submitted(app.state.execution)['id']
+    first=store.upload(first_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(second_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="PASS"/></test></suite></robot>')
+    result=store.compare_saved_reports(first_run,first['id'],first['sha256'],second_run,second['id'],second['sha256'])
+    assert result['counts']=={'fail_to_pass':1}
+    assert result['comparability']['first_association']=='operator_asserted'
+    assert result['comparability']['status'] in ('matching_metadata_unverified','unknown')
+    assert any('not proof of flakiness' in item for item in result['limitations'])
+    with app.state.execution.connect() as db:
+        import json
+        row=db.execute('SELECT record FROM plans WHERE id=?',(second_run,)).fetchone()
+        data=json.loads(row[0]);data['commit']='f'*40
+        db.execute('UPDATE plans SET record=? WHERE id=?',(json.dumps(data),second_run))
+    changed=store.compare_saved_reports(first_run,first['id'],first['sha256'],second_run,second['id'],second['sha256'])
+    assert changed['comparability']['status']=='different' and 'commit' in changed['comparability']['different_fields']
+
+
+def test_saved_run_comparison_for_ai_requires_scope_and_approval(tmp_path,monkeypatch):
+    from relay.assistant import Answer
+    monkeypatch.setenv('RELAY_AI_ENABLED','1')
+    app,first_run,store=setup(tmp_path)
+    second_run=submitted(app.state.execution)['id']
+    first=store.upload(first_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(second_run,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="PASS"/></test></suite></robot>')
+    class Provider:
+        async def answer(self,context):
+            assert context['comparison']['comparability']['first_association']=='operator_asserted'
+            return Answer.model_validate({'action':'answer','message':'Observed','selection':None,'hypotheses':[],'bug_report_draft':None,
+                'comparison_citations':[{'pair_id':'0','claim':'Observed fail to pass'}]})
+    app.state.assistant.provider=Provider()
+    with TestClient(app) as client:
+        scope=client.post('/api/conversations').json()['id']
+        ref={'conversation_id':scope,'first_run_id':first_run,'first_id':first['id'],'first_sha256':first['sha256'],
+             'second_run_id':second_run,'second_id':second['id'],'second_sha256':second['sha256'],'share':True}
+        body={'message':'Compare','share_context':True,'run_id':first_run,'comparison':ref}
+        response=client.post('/api/assistant/chat',json=body)
+        assert response.status_code==200,response.text
+        assert response.json()['comparison_shared']['counts']=={'fail_to_pass':1}
+        assert client.post('/api/assistant/chat',json={**body,'run_id':'a'*32}).status_code==422
+        assert client.post('/api/assistant/chat',json={**body,'comparison':{**ref,'share':False}}).status_code==422
+
+
+def test_identical_report_bytes_can_be_compared_across_distinct_runs(tmp_path):
+    app,first_run,store=setup(tmp_path)
+    second_run=submitted(app.state.execution)['id']
+    first=store.upload(first_run,'output.xml',REPORT)
+    second=store.upload(second_run,'output.xml',REPORT)
+    result=store.compare_saved_reports(first_run,first['id'],first['sha256'],second_run,second['id'],second['sha256'])
+    assert result['counts']=={'unchanged':1}
+    with pytest.raises(PlanError): store.compare_saved_reports(first_run,first['id'],first['sha256'],first_run,first['id'],first['sha256'])
+
+
+def test_saved_run_comparison_api_checks_both_run_scopes(tmp_path):
+    app,run1,store=setup(tmp_path)
+    run2=submitted(app.state.execution)['id'];other=submitted(app.state.execution)['id']
+    first=store.upload(run1,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(run2,'output.xml',b'<robot><suite name="API"><test name="Login"><status status="PASS"/></test></suite></robot>')
+    body={'first_sha256':first['sha256'],'second_run_id':run2,'second_id':second['id'],'second_sha256':second['sha256']}
+    with TestClient(app) as client:
+        url=f"/api/remote-runs/{run1}/evidence/{first['id']}/robot-report/compare"
+        assert client.post(url,json=body).json()['counts']=={'fail_to_pass':1}
+        assert client.post(url,json={**body,'second_run_id':other}).status_code==404
+        assert client.post(url,json={**body,'second_sha256':'0'*64}).status_code==409

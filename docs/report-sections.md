@@ -64,7 +64,10 @@ tests. Existing API clients that only send `share: true` retain failure discover
 are discovery, not citable evidence: the model must read a discovered test section
 before citing it. Scope, attachment hash and redacted search snapshots are checked
 again throughout the request. The UI trace reports counts and offsets, not raw
-queries. Search currently excludes saved-run reports.
+queries. The same search and suite parsers are available for saved-run Robot evidence. A
+saved run may share its report with AI after explicit consent; run identity, artifact
+hash and retention are rechecked, and manual-upload association remains operator-
+asserted rather than provider-verified.
 
 Automatic discovery may be combined with separately approved original-source
 sharing; source configuration, identities, model-round and input limits still
@@ -95,5 +98,35 @@ checked before and after model calls.
 
 These files have unverified pipeline, revision, environment and attempt associations.
 Matching names do not prove comparable runs. Fail-to-pass is an observed change,
-not proof of flakiness or root cause. Saved-run history correlation, automatically
+not proof of flakiness or root cause. Saved-run history comparison, automatically
 verified comparability and historical repeated-run analysis remain follow-ups.
+
+## Guided investigation task approval
+
+In guided mode, the message and eligible attachment, selected-run, related-run
+and registered-source metadata can be sent to the configured model for planning.
+File contents are not sent during planning. The model may propose report, reference,
+comparison and source capabilities; the server validates every resource and the
+operator reviews the scopes, hashes, purposes, provider and expiration before approval.
+The approval is bound to the task, conversation, request, resource versions, run
+identity and model recipient. A local model gateway may forward content upstream.
+
+For registered sources, the first approval permits reading the chosen source locally
+or from its configured provider. Relay then shows the prepared file hashes and requires
+a second approval before source content is shared with AI. Changed files, source
+configuration, provider, resource hash or redaction invalidate the task rather than
+silently expanding permission. Denial or revocation prevents subsequent sharing and
+results are discarded when access is revoked during model execution.
+
+Pending tasks can be retrieved after refresh. Approval is claimed atomically and
+repeated approval does not run the task twice. If an in-flight task is interrupted,
+its lease expires and the operator must create and approve a new task; it is never
+automatically replayed. Approval expires after 15 minutes. Task messages, decisions
+and redacted results are kept in the local SQLite database (restricted to owner access)
+for up to seven days after expiration, with lazy cleanup. This is a local single-user
+workflow, not multi-tenant authorization.
+
+Original sources must be registered and eligible for the selected project, SUT and
+explicit environment. Saved-run report associations are operator-asserted. The model
+sees only bounded candidate metadata during planning and cannot access arbitrary
+paths, execute pipelines, change files or grant itself permissions.

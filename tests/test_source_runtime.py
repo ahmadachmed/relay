@@ -563,3 +563,160 @@ def test_report_source_and_optional_reference_keep_distinct_citations(harness):
     assert result.status_code==200, result.text
     data=result.json()
     assert data['answer']['report_citations'] and data['answer']['source_citations'] and data['answer']['reference_citations']
+
+
+def test_task_sources_require_read_then_exact_snapshot_share_approval(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    reads=[]
+    from relay import source_runtime
+    original=source_runtime.read_local
+    def counted(*args,**kwargs): reads.append(True);return original(*args,**kwargs)
+    monkeypatch.setattr(source_runtime,'read_local',counted)
+    def respond(context,index):
+        if context.get('task_planning'):
+            assert 'Voucher must be active' not in json.dumps(context)
+            assert any(source['id']=='rules' for source in context['task_planning']['sources'])
+            return answer(access_requests=[{'kind':'source','resource_ids':['rules'],'purpose':'Read the requirements','search_all':False,'include_suites':False}])
+        shared=context['source_context']['sections']
+        assert shared and 'Voucher must be active' in shared[0]['text']
+        return answer(source_citations=[{'handle':shared[0]['handle'],'claim':'Requirements'}])
+    provider=Fake(respond);app.state.assistant.provider=provider
+    with client:
+        scope=client.post('/api/conversations').json()['id']
+        request={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}
+        task=client.post(f'/api/conversations/{scope}/tasks',json=request).json()
+        url=f"/api/conversations/{scope}/tasks/{task['id']}"
+        pending=client.post(url+'/plan').json()
+        assert pending['status']=='awaiting_approval' and not reads and len(provider.calls)==1
+        prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+        assert prepared['status']=='awaiting_source_share' and reads and len(provider.calls)==1
+        assert prepared['approval_hash']!=pending['approval_hash']
+        assert prepared['source_snapshot']['files'][0]['sha256']
+        assert 'Voucher must be active' not in json.dumps(prepared)
+        assert str(root) not in json.dumps(prepared)
+        assert client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).status_code==409
+        done=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+        assert done['status']=='completed' and len(provider.calls)==2
+        assert done['answer']['answer']['source_citations']
+
+
+def test_task_does_not_send_source_changed_after_snapshot_approval(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    def respond(context,index):
+        if context.get('task_planning'):
+            return answer(access_requests=[{'kind':'source','resource_ids':['rules'],'purpose':'Read rules','search_all':False,'include_suites':False}])
+        pytest.fail('Changed source must not reach the model')
+    provider=Fake(respond);app.state.assistant.provider=provider
+    scope=client.post('/api/conversations').json()['id']
+    task=client.post(f'/api/conversations/{scope}/tasks',json={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}).json()
+    url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json()
+    prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    assert prepared['status']=='awaiting_source_share'
+    (root/'docs'/'rules.md').write_text('# Changed\nUnapproved content')
+    result=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+    assert result['status']=='failed' and result['error']['code']=='task_source_changed'
+    assert len(provider.calls)==1
+
+
+def test_task_report_and_source_share_only_after_both_approvals(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    scope=client.post('/api/conversations').json()['id']
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=b'<robot><suite><test name="voucher"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>').json()
+    def respond(context,index):
+        if context.get('task_planning'):
+            assert 'HTTP 500' not in json.dumps(context) and 'Voucher must be active' not in json.dumps(context)
+            return answer(access_requests=[{'kind':'report','resource_ids':[item['id']],'purpose':'Inspect failure','search_all':False,'include_suites':False},
+                {'kind':'source','resource_ids':['rules'],'purpose':'Compare rules','search_all':False,'include_suites':False}])
+        if index==2:
+            assert context['auto_report']['failures'] and context['source_context']['sections']
+            return answer(report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+        assert context['report_attachment']['items'][0]['text']=='HTTP 500'
+        return answer(report_citations=[{'section_id':'0','claim':'Observed failure'}],
+                      source_citations=[{'handle':context['source_context']['sections'][0]['handle'],'claim':'Rule'}])
+    provider=Fake(respond);app.state.assistant.provider=provider
+    request={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}
+    task=client.post(f'/api/conversations/{scope}/tasks',json=request).json()
+    url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json()
+    assert pending['status']=='awaiting_approval'
+    prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    assert prepared['status']=='awaiting_source_share' and len(provider.calls)==1
+    done=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+    assert done['status']=='completed',done
+    assert done['answer']['answer']['report_citations'] and done['answer']['answer']['source_citations']
+    assert len(provider.calls)==3
+
+
+def test_task_discards_answer_if_source_redaction_changes_during_model_call(harness,monkeypatch):
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1')
+    monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    def respond(context,index):
+        if context.get('task_planning'):
+            return answer(access_requests=[{'kind':'source','resource_ids':['rules'],'purpose':'Read rules','search_all':False,'include_suites':False}])
+        monkeypatch.setenv('RELAY_RUNTIME_SECRET','Voucher must be active')
+        return answer()
+    provider=Fake(respond);app.state.assistant.provider=provider
+    scope=client.post('/api/conversations').json()['id']
+    task=client.post(f'/api/conversations/{scope}/tasks',json={'message':'Voucher rules','share_context':True,'context':dict(project_id='api',pipeline_id='smoke',branch='main',sut_id='service-a',parameters={'ENV':'uat'})}).json()
+    url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json()
+    prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    result=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+    assert result['status']=='failed' and result['error']['code']=='task_source_redaction_changed'
+    assert result['answer'] is None
+
+
+def test_guided_investigation_combines_runs_report_reference_and_source(harness,monkeypatch):
+    from relay.evidence import EvidenceStore
+    from test_monitoring import submitted
+    app,client,_,root,config=harness
+    monkeypatch.setenv('RELAY_AI_BASE_URL','http://localhost:20128/v1');monkeypatch.setenv('RELAY_AI_MODEL','synthetic-model')
+    from relay.execution import ExecutionService
+    forbidden=app.state.execution.execute
+    monkeypatch.setattr(app.state.execution,'execute',ExecutionService.execute.__get__(app.state.execution))
+    first_run=submitted(app.state.execution)['id'];second_run=submitted(app.state.execution)['id']
+    monkeypatch.setattr(app.state.execution,'execute',forbidden)
+    for run_id in (first_run,second_run):
+        record=app.state.execution.get(run_id);record['plan']['sut_id']='service-a'
+        with app.state.execution.connect() as db: db.execute('UPDATE plans SET record=? WHERE id=?',(json.dumps(record),run_id))
+    store=EvidenceStore(app.state.execution,app.state.monitor)
+    first=store.upload(first_run,'output.xml',b'<robot><suite name="API"><test name="Voucher"><msg>HTTP 500</msg><status status="FAIL"/></test></suite></robot>')
+    second=store.upload(second_run,'output.xml',b'<robot><suite name="API"><test name="Voucher"><msg>HTTP 200</msg><status status="PASS"/></test></suite></robot>')
+    scope=client.post('/api/conversations').json()['id']
+    doc=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'requirements.txt'},content=b'Voucher must be active').json()
+    def respond(context,index):
+        if context.get('task_planning'):
+            payload=json.dumps(context)
+            assert 'HTTP 500' not in payload and 'Voucher must be active' not in payload
+            return answer(access_requests=[
+                {'kind':'saved_report','resource_ids':[first['id']],'purpose':'Read failure','search_all':False,'include_suites':False},
+                {'kind':'saved_comparison','resource_ids':[first['id'],second['id']],'purpose':'Compare runs','search_all':False,'include_suites':False},
+                {'kind':'reference','resource_ids':[doc['id']],'purpose':'Read requirement','search_all':False,'include_suites':False},
+                {'kind':'source','resource_ids':['rules'],'purpose':'Inspect source','search_all':False,'include_suites':False}])
+        if index==2:
+            assert context['comparison']['counts']=={'fail_to_pass':1}
+            assert context['reference_attachment']['sections'] and context['source_context']['sections']
+            return answer(report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+        return answer(report_citations=[{'section_id':'0','claim':'500'}],
+            comparison_citations=[{'pair_id':'0','claim':'Observed result difference'}],
+            reference_citations=[{'section_id':'0','claim':'Expected requirement'}],
+            source_citations=[{'handle':context['source_context']['sections'][0]['handle'],'claim':'Source rule'}])
+    provider=Fake(respond);app.state.assistant.provider=provider
+    task=client.post(f'/api/conversations/{scope}/tasks',json={'message':'Voucher rules','share_context':True,'run_id':first_run}).json()
+    url=f"/api/conversations/{scope}/tasks/{task['id']}"
+    pending=client.post(url+'/plan').json()
+    assert pending['status']=='awaiting_approval',pending
+    prepared=client.post(url+'/approve',json={'approval_hash':pending['approval_hash']}).json()
+    assert prepared['status']=='awaiting_source_share',prepared
+    done=client.post(url+'/approve',json={'approval_hash':prepared['approval_hash']}).json()
+    assert done['status']=='completed',done
+    final=done['answer']['answer']
+    assert final['report_citations'] and final['comparison_citations'] and final['reference_citations'] and final['source_citations']

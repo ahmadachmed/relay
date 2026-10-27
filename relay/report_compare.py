@@ -44,8 +44,8 @@ def _read(body):
     return tests
 
 
-def compare_robot(first, second, first_sha, second_sha, offset=0, limit=20, sanitize=None):
-    if first_sha==second_sha:
+def compare_robot(first, second, first_sha, second_sha, offset=0, limit=20, sanitize=None, allow_identical=False):
+    if first_sha==second_sha and not allow_identical:
         raise PlanError('comparison_same_report','Choose two different reports.',422)
     if offset<0 or offset>100000 or not 1<=limit<=50:
         raise PlanError('comparison_page','Invalid comparison page.',422)

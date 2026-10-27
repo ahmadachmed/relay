@@ -1116,3 +1116,76 @@ def test_auto_report_search_discovers_suite_setup_only_with_explicit_suite_acces
             return answer(action='answer')
     app.state.assistant.provider=WithoutSuiteConsent()
     assert post(client,auto_report={**ref,'include_suites':False}).status_code==200
+
+
+def test_auto_report_retains_prior_test_evidence_with_distinct_citations(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><test name="one"><msg>first failure</msg><status status="FAIL"/></test><test name="two"><msg>second failure</msg><status status="FAIL"/></test></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            if self.calls==2:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'1','offset':0}])
+            old=context['evidence_history']['pages'][0]['items'][0]
+            assert old['text']=='first failure'
+            assert context['report_attachment']['items'][0]['text']=='second failure'
+            return answer(action='answer',report_citations=[{'section_id':'0','claim':'Second failure'}],
+                evidence_history_citations=[{'handle':old['history_handle'],'claim':'First failure'}])
+    app.state.assistant.provider=Provider()
+    response=post(client,auto_report=ref)
+    assert response.status_code==200,response.text
+    assert response.json()['evidence_history']['pages'][0]['entity_id']=='0'
+    assert response.json()['report_shared']['test_id']=='1'
+    assert response.json()['answer']['evidence_history_citations']
+
+
+def test_suite_then_test_can_cite_retained_suite_evidence(harness):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><kw name="setup" type="SETUP"><msg>database unavailable</msg><status status="FAIL"/></kw><test name="blocked"><msg>blocked</msg><status status="FAIL"/></test><status status="FAIL"/></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True,'include_suites':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return answer(action='answer',report_operations=[{'operation':'list_suites','test_id':None,'offset':0}])
+            if self.calls==2:return answer(action='answer',report_operations=[{'operation':'read_suite','suite_id':'0','test_id':None,'offset':0}])
+            if self.calls==3:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            old=context['evidence_history']['pages'][0]
+            assert old['kind']=='suite' and old['items'][0]['text']=='database unavailable'
+            return answer(action='answer',evidence_history_citations=[{'handle':old['items'][0]['history_handle'],'claim':'Setup evidence'}],
+                report_citations=[{'section_id':'0','claim':'Blocked test'}])
+    app.state.assistant.provider=Provider()
+    response=post(client,auto_report=ref)
+    assert response.status_code==200,response.text
+    assert response.json()['evidence_history']['pages'][0]['kind']=='suite'
+    assert response.json()['answer']['report_citations'] and response.json()['answer']['evidence_history_citations']
+
+
+def test_unshared_history_citation_is_rejected(harness):
+    app,client,fake=harness
+    fake.result=answer(action='answer',evidence_history_citations=[{'handle':'f'*64,'claim':'not shared'}])
+    assert post(client).status_code==502
+
+
+def test_retained_history_redaction_change_discards_answer(harness,monkeypatch):
+    app,client,_=harness
+    scope=client.post('/api/conversations').json()['id']
+    body=b'<robot><suite name="Root"><test name="one"><msg>first-private-history-value</msg><status status="FAIL"/></test><test name="two"><msg>other</msg><status status="FAIL"/></test></suite></robot>'
+    item=client.post(f'/api/conversations/{scope}/attachments',params={'filename':'output.xml'},content=body).json()
+    ref={'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Provider:
+        calls=0
+        async def answer(self,context):
+            self.calls+=1
+            if self.calls==1:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            if self.calls==2:return answer(action='answer',report_operations=[{'operation':'read_test','test_id':'1','offset':0}])
+            monkeypatch.setenv('RELAY_HISTORY_SECRET','first-private-history-value')
+            return answer(action='answer')
+    app.state.assistant.provider=Provider()
+    assert post(client,auto_report=ref).status_code==409

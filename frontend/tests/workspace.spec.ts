@@ -1374,3 +1374,92 @@ test('comparison shares only the selected local page with explicit one-request a
   expect(requests[0].comparison).toEqual({conversation_id:scope,first_id:first,first_sha256:hash1,second_id:second,second_sha256:hash2,offset:0,share:true});
   await expect(page.getByRole('checkbox',{name:/Share the selected page/})).not.toBeChecked();
 });
+
+test('saved-run report AI sharing is explicitly scoped to the selected run', async ({page}) => {
+  await fixtures(page,true);
+  const scope='c'.repeat(32), artifact='d'.repeat(32), hash='e'.repeat(64);
+  await page.addInitScript(({runId,scopeId})=>{localStorage.setItem('relay.ui.selected',runId);localStorage.setItem(`relay.ui.attachment-scope-${runId}`,scopeId);},{runId:id,scopeId:scope});
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[]}));
+  await page.route(`**/api/remote-runs/${id}/evidence`,r=>r.fulfill({json:{...missing,artifacts:[{id:artifact,name:'output.xml',format:'robot_xml',availability:'available',parse_status:'parsed',sha256:hash,association:'operator_asserted'}]}}));
+  const requests:any[]=[];
+  await page.route('**/api/assistant/chat',r=>{requests.push(r.request().postDataJSON());return r.fulfill({json:{answer:{action:'answer',message:'Observed',selection:null,hypotheses:[],bug_report_draft:null},run_id:id,facts:null,limitations:[]}});});
+  await page.goto('/ui/');
+  await page.getByLabel('Saved-run Robot report').selectOption(artifact);
+  const consent=page.getByRole('checkbox',{name:/Let AI search this saved-run report/});
+  await expect(consent).not.toBeChecked();
+  await consent.check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate saved report');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect.poll(()=>requests.length).toBe(1);
+  expect(requests[0].auto_report).toEqual({conversation_id:scope,run_id:id,artifact_id:artifact,sha256:hash,share:true,search_all:true,include_suites:true});
+  await expect(consent).not.toBeChecked();
+});
+
+test('guided attachment task survives refresh and requires matching approval', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), sha='e'.repeat(64), taskId='f'.repeat(32), approval='a'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:sha,size:123,status:'stored_format_unverified'}]}));
+  let status='draft';let approved=0;
+  const task=()=>({id:taskId,conversation_id:scope,status,created_at:Date.now()/1000,expires_at:Date.now()/1000+900,message:'Investigate',planner_message:'I need the report',approval_hash:status==='draft'?null:approval,recipient:{base_url:'http://localhost:20128/v1',model:'synthetic',protocol:'chat_completions',local_gateway_may_forward:true},capabilities:status==='draft'?[]:[{kind:'report',purpose:'Inspect failures',search_all:true,include_suites:true,resources:[{id:attachment,filename:'output.xml',sha256:sha}]}],limitations:['Sources and saved-run evidence are not supported.'],answer:status==='completed'?{answer:{action:'answer',message:'Observed failure',selection:null,hypotheses:[],bug_report_draft:null},facts:null,run_id:null,limitations:[]}:null});
+  await page.route(`**/api/conversations/${scope}/tasks`,r=>r.fulfill({json:task()}));
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}/plan`,r=>{status='awaiting_approval';return r.fulfill({json:task()});});
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}`,r=>r.fulfill({json:task()}));
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}/approve`,r=>{expect(r.request().postDataJSON()).toEqual({approval_hash:approval});approved++;status='completed';return r.fulfill({json:task()});});
+  await page.goto('/ui/');
+  await page.getByRole('checkbox',{name:/Let AI propose attachment access/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect(page.getByLabel('Investigation task')).toContainText('awaiting_approval');
+  await expect(page.getByLabel('Investigation task')).toContainText(sha);
+  expect(approved).toBe(0);
+  await page.reload();
+  await expect(page.getByLabel('Investigation task')).toContainText('awaiting_approval');
+  await page.getByRole('button',{name:'Approve task access'}).click();
+  await expect(page.getByLabel('Investigation task')).toContainText('Observed failure');
+  expect(approved).toBe(1);
+});
+
+test('guided source task asks for exact snapshot approval before model sharing', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32),taskId='f'.repeat(32),firstHash='a'.repeat(64),secondHash='b'.repeat(64),sourceSha='d'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[]}));
+  let status='draft';const approvals:string[]=[];
+  const task=()=>({id:taskId,conversation_id:scope,status,created_at:Date.now()/1000,expires_at:Date.now()/1000+900,message:'Investigate',approval_hash:status==='awaiting_approval'?firstHash:secondHash,recipient:{base_url:'http://localhost:20128/v1',model:'synthetic',protocol:'chat_completions',local_gateway_may_forward:true},capabilities:status==='draft'?[]:[{kind:'source',purpose:'Read rules',search_all:false,include_suites:false,resources:[{id:'rules',provider:'local',revision:null,config_sha256:'e'.repeat(64)}]}],limitations:['Sources require two approvals.'],source_snapshot:['awaiting_source_share','completed'].includes(status)?{files:[{source_id:'rules',path:'docs/rules.md',sha256:sourceSha,commit:null}]}:null,source_diagnostics:[],answer:status==='completed'?{answer:{action:'answer',message:'Source reviewed',selection:null,hypotheses:[],bug_report_draft:null},facts:null,run_id:null,limitations:[]}:null});
+  await page.route(`**/api/conversations/${scope}/tasks`,r=>r.fulfill({json:task()}));
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}/plan`,r=>{status='awaiting_approval';return r.fulfill({json:task()});});
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}`,r=>r.fulfill({json:task()}));
+  await page.route(`**/api/conversations/${scope}/tasks/${taskId}/approve`,r=>{approvals.push(r.request().postDataJSON().approval_hash);status=approvals.length===1?'awaiting_source_share':'completed';return r.fulfill({json:task()});});
+  await page.goto('/ui/');
+  await page.getByRole('checkbox',{name:/Let AI propose attachment access/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await page.getByRole('button',{name:'Approve task access'}).click();
+  await expect(page.getByLabel('Source versions for approval')).toContainText(sourceSha);
+  expect(approvals).toEqual([firstHash]);
+  await page.getByRole('button',{name:'Approve source sharing'}).click();
+  await expect(page.getByLabel('Investigation task')).toContainText('Source reviewed');
+  expect(approvals).toEqual([firstHash,secondHash]);
+});
+
+test('earlier shared evidence stays visible and linked separately from latest report', async ({page}) => {
+  await fixtures(page);
+  const scope='c'.repeat(32), attachment='d'.repeat(32), hash='e'.repeat(64), handle='a'.repeat(64);
+  await page.addInitScript(s=>localStorage.setItem('relay.ui.attachment-scope-planning',s),scope);
+  await page.route('**/api/assistant',r=>r.fulfill({json:{enabled:true,configured:true}}));
+  await page.route(`**/api/conversations/${scope}/attachments`,r=>r.fulfill({json:[{id:attachment,filename:'output.xml',sha256:hash,size:123,status:'stored_format_unverified'}]}));
+  await page.route(`**/api/conversations/${scope}/attachments/${attachment}/robot-report?*`,r=>r.fulfill({json:{sha256:hash,total:1,offset:0,next_offset:null,items:[{id:'0',name:'Blocked',status:'FAIL'}]}}));
+  await page.route('**/api/assistant/chat',r=>r.fulfill({json:{answer:{action:'answer',message:'Investigated',selection:null,hypotheses:[],bug_report_draft:null,evidence_history_citations:[{handle,claim:'Setup evidence'}],report_citations:[{section_id:'0',claim:'Blocked test'}]},run_id:null,facts:null,limitations:[],evidence_history:{omitted_pages:0,omitted_sections:0,limitations:['Partial coverage'],pages:[{kind:'suite',entity_id:'0',metadata:{name:'Root',suite_path:'Root',status:'FAIL'},items:[{section_id:'0',history_handle:handle,scope:'SETUP',kind:'msg',name:'',text:'Database unavailable',truncated:false}]}]},report_shared:{attachment_id:attachment,sha256:hash,test_id:'0',test:{id:'0',name:'Blocked',status:'FAIL'},offset:0,total:1,next_offset:null,items:[{section_id:'0',kind:'msg',name:'',text:'Blocked test',truncated:false,text_offset:0,next_text_offset:null,text_sha256:'b'.repeat(64)}]}}}));
+  await page.goto('/ui/');
+  await page.getByLabel('Robot report').selectOption(attachment);
+  await page.getByRole('checkbox',{name:/Let AI search this report/}).check();
+  await page.getByRole('textbox',{name:'Structured command'}).fill('Investigate');
+  await page.getByRole('button',{name:'Send command'}).click();
+  await expect(page.getByLabel('Earlier report evidence shared with AI')).toContainText('Database unavailable');
+  await expect(page.getByRole('link',{name:'Earlier evidence'})).toHaveAttribute('href',`#history-${handle}`);
+  await expect(page.getByLabel('Report details shared with AI')).toContainText('Blocked test');
+});
