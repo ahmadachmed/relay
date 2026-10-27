@@ -18,6 +18,7 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None, sanitize=None, se
         raise PlanError('report_limit', 'Report exceeds 10 MB.', 413)
     tests, records, stack = [], [], []
     current = None
+    suite_names = []
     nodes = 0
     try:
         for event, element in ET.iterparse(io.BytesIO(body), events=('start', 'end'), forbid_dtd=True):
@@ -28,10 +29,15 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None, sanitize=None, se
                     raise PlanError('report_limit', 'Report exceeds node or nesting limits.', 413)
                 if nodes == 1 and element.tag != 'robot':
                     raise PlanError('unsupported_report', 'Expected a Robot Framework output XML.', 415)
+                if element.tag == 'suite':
+                    suite_name = clean(element.get('name', ''))
+                    suite_names.append((suite_name[:300], len(suite_name) > 300))
                 if element.tag == 'test':
                     if current is not None:
                         raise PlanError('invalid_report', 'Nested tests are unsupported.', 422)
-                    current = {'id': str(len(tests)), 'name': clean(element.get('name', ''))[:300], 'status': 'UNKNOWN'}
+                    path = ' / '.join(name for name, _ in suite_names)
+                    current = {'id': str(len(tests)), 'name': clean(element.get('name', ''))[:300], 'status': 'UNKNOWN',
+                               'suite_path': path[:600], 'suite_path_truncated': len(path) > 600 or any(truncated for _, truncated in suite_names)}
                     records = []
             else:
                 if current is not None:
@@ -56,6 +62,8 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None, sanitize=None, se
                             selected = records
                         tests.append(current)
                         current = None
+                if element.tag == 'suite':
+                    suite_names.pop()
                 element.clear()
                 stack.pop()
     except (ParseError, DefusedXmlException, LookupError, ValueError):
