@@ -47,7 +47,7 @@ class ConversationFiles:
         self.validate_scope(conversation_id)
         with self.execution.connect() as db:
             rows = db.execute("SELECT id,filename,media_type,sha256,size,created_at FROM conversation_files WHERE conversation_id=? ORDER BY created_at,id", (conversation_id,)).fetchall()
-        return [dict(id=r[0], filename=r[1], media_type=r[2], sha256=r[3], size=r[4], status="stored_not_analyzed", created_at=r[5]) for r in rows]
+        return [dict(id=r[0], filename=r[1], media_type=r[2], sha256=r[3], size=r[4], status="stored_format_unverified", created_at=r[5]) for r in rows]
 
     def upload(self, conversation_id, filename, media_type, body):
         self.validate_scope(conversation_id)
@@ -74,9 +74,9 @@ class ConversationFiles:
         media_type = (media_type or "application/octet-stream").split(";", 1)[0][:100]
         with self.execution.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            existing = db.execute("SELECT id FROM conversation_files WHERE conversation_id=? AND sha256=?", (conversation_id, sha)).fetchone()
+            existing = db.execute("SELECT id,filename,media_type,sha256,size,created_at FROM conversation_files WHERE conversation_id=? AND sha256=?", (conversation_id, sha)).fetchone()
             if existing:
-                return next(item for item in self.list(conversation_id) if item["id"] == existing[0])
+                return dict(id=existing[0], filename=existing[1], media_type=existing[2], sha256=existing[3], size=existing[4], status="stored_format_unverified", created_at=existing[5])
             global_total = db.execute("SELECT coalesce(sum(size),0) FROM conversation_files").fetchone()[0]
             if global_total + len(body) > GLOBAL_LIMIT:
                 raise PlanError("attachment_quota", "Global attachment storage limit reached.", 413)

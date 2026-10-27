@@ -202,7 +202,7 @@ export default function Workspace() {
       try {
         let scope=storage.get(`attachment-scope-${conversationKey}`);
         let files:ConversationFile[]=[];
-        if(scope){try{files=await api<ConversationFile[]>(`/api/conversations/${scope}/attachments`);}catch{scope=null;}}
+        if(scope){try{files=await api<ConversationFile[]>(`/api/conversations/${scope}/attachments`);}catch(e){if(e instanceof ApiError && e.status===404 && e.code==="not_found")scope=null;else throw e;}}
         if(!scope){const created=await api<{id:string}>("/api/conversations",{method:"POST"});scope=created.id;}
         if(live){storage.set(`attachment-scope-${conversationKey}`,scope);setAttachmentMap(old=>({...old,[scope!]:files}));setAttachmentScope(scope);}
       }catch(e){if(live)setAttachmentError(errorText(e));}
@@ -1539,7 +1539,7 @@ export default function Workspace() {
         <div className="composer-wrap">
 
           <form className="composer" onSubmit={sendCommand}>
-            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError}</span>}</div>
+            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified, not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>setScopeGeneration(old=>old+1)}>Retry</button></span>}</div>
             <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(e.target.files)}/>
             <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy||!attachmentScope} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">

@@ -9,6 +9,10 @@ def test_conversation_attachment_scope_and_format(tmp_path):
     path = f'/api/conversations/{a}/attachments'
     result = client.post(path, params={'filename': 'output.xml'}, content=b'<robot/>')
     assert result.status_code == 200
+    retry = client.post(path, params={'filename': 'output.xml'}, content=b'<robot/>')
+    assert retry.status_code == 200
+    assert retry.json()['id'] == result.json()['id']
+    assert retry.json()['status'] == 'stored_format_unverified'
     assert client.get(f'/api/conversations/{b}/attachments').json() == []
     assert client.delete(f"/api/conversations/{b}/attachments/{result.json()['id']}").status_code == 404
     assert client.get('/api/conversations/' + 'f' * 32 + '/attachments').status_code == 404
