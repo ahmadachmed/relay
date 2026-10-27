@@ -1256,7 +1256,7 @@ for (const width of [390, 1440]) test(`automatic report search needs explicit on
   const requests:any[]=[];
   await page.route('**/api/assistant/chat',r=>{
     requests.push(r.request().postDataJSON());
-    return r.fulfill({json:{answer:{action:'answer',message:'Review failure.',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[],auto_report:requests.at(-1).auto_report ? {total_tests:30,total_failures:25,listed_failures:20,tests_with_sections_shared:1,offset:0,next_offset:20,coverage:'Partial coverage.'} : null}});
+    return r.fulfill({json:{answer:{action:'answer',message:'Review failure.',selection:null,hypotheses:[],bug_report_draft:null},run_id:null,facts:null,limitations:[],auto_report:requests.at(-1).auto_report ? {total_tests:30,total_failures:25,listed_failures:20,tests_with_sections_shared:1,offset:0,next_offset:20,budget_diagnostics:['Optional knowledge omitted to fit report context budget.'],coverage:'Partial coverage.'} : null}});
   });
   await page.goto('/ui/');
   await page.getByLabel('Robot report').selectOption(attachment);
@@ -1267,6 +1267,7 @@ for (const width of [390, 1440]) test(`automatic report search needs explicit on
   expect(requests[0].auto_report).toEqual({conversation_id:scope,attachment_id:attachment,sha256:hash,share:true});
   expect(requests[0].report_attachment).toBeNull();
   await expect(page.getByLabel('Automatic report search')).toContainText('Some failures were not listed');
+  await expect(page.getByLabel('Automatic report search')).toContainText('Optional knowledge omitted');
   await expect(page.getByRole('checkbox',{name:/Let AI search this report/})).not.toBeChecked();
   await page.getByRole('textbox',{name:'Structured command'}).fill('Another question');
   await page.getByRole('button',{name:'Send command'}).click();

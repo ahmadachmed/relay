@@ -886,3 +886,45 @@ def test_auto_report_rechecks_omitted_failure_names_for_redaction_changes(harnes
             return answer(action='answer')
     app.state.assistant.provider = Reader()
     assert post(client, auto_report=ref).status_code == 409
+
+
+def test_auto_report_omits_optional_knowledge_before_failure_discovery(harness, monkeypatch):
+    app, client, fake = harness
+    evidence(app, monkeypatch)
+    monkeypatch.setattr('relay.assistant.load_knowledge', lambda *args: {'sources':[{'document_id':'overview','text':'a'*8000,'id':'doc'}], 'diagnostics':[]})
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    item = client.post(path, params={'filename':'output.xml'}, content=b'<robot><suite><test name="failure"><msg>detail</msg><status status="FAIL"/></test></suite></robot>').json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    result = post(client, run_id=RUN, history=[{'role':'user','text':'x'*4000} for _ in range(6)], analysis_context={'test_code':'y'*6000,'expected_behavior':'z'*3000}, auto_report=ref, include_automation_knowledge=True)
+    assert result.status_code == 200, result.text
+    assert fake.calls[-1]['auto_report']['failures'][0]['name'] == 'failure'
+    assert fake.calls[-1]['project_knowledge'] is None
+    assert 'omitted' in result.json()['auto_report']['budget_diagnostics'][0]
+    assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+
+
+def test_auto_report_omits_optional_knowledge_for_selected_detail(harness, monkeypatch):
+    app, client, _ = harness
+    evidence(app, monkeypatch)
+    monkeypatch.setattr('relay.assistant.load_knowledge', lambda *args: {'sources':[{'document_id':'overview','text':'a'*8000,'id':'doc'}], 'diagnostics':[]})
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="failure"><msg>' + '漢'*2000 + '</msg><status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope,'attachment_id':item['id'],'sha256':item['sha256'],'share':True}
+    class Reader:
+        def __init__(self): self.calls=0
+        async def answer(self, context):
+            self.calls += 1
+            if self.calls == 1:
+                assert context['project_knowledge']['sources']
+                return answer(action='answer', report_operations=[{'operation':'read_test','test_id':'0','offset':0}])
+            assert context['project_knowledge'] is None
+            assert context['report_attachment']['items'][0]['text'] == '漢'*2000
+            return answer(action='answer')
+    app.state.assistant.provider = Reader()
+    result = post(client, run_id=RUN, history=[{'role':'user','text':'x'*4000} for _ in range(4)], analysis_context={'test_code':'y'*6000,'expected_behavior':'z'*3000}, auto_report=ref, include_automation_knowledge=True)
+    assert result.status_code == 200, result.text
+    assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+    assert result.json()['report_shared']['items']

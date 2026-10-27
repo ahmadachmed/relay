@@ -57,6 +57,8 @@ sections of a previously listed failed test. The consent applies to this request
 not later messages. Use the returned citations and shared section display to inspect
 what was actually sent from the latest test detail page. Earlier detail pages are
 not retained or citable in the response; the trace records only their IDs and counts.
+If optional knowledge prevents report data from fitting, Relay omits it and shows
+a diagnostic rather than silently discarding requested report evidence.
 An uploaded report is not proof that a saved pipeline ran it.
 
 A maximum of four model rounds, 20 failures or test sections per page, a cumulative

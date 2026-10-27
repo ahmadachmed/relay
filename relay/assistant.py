@@ -523,6 +523,21 @@ class Assistant:
                     raise PlanError('ai_context_limit', 'No report section fits the remaining AI input budget. Reduce other context.', 413)
             if len(json.dumps(context).encode()) > 48_000:
                 raise PlanError('ai_context_limit', 'Context exceeds the AI input budget. Reduce the added context, configured catalog or message.', 413)
+            def make_room_for_report():
+                if len(json.dumps(context).encode()) <= 44000:
+                    return
+                omitted = False
+                for context_key, fact_key in [('project_knowledge', 'knowledge'), ('sut_knowledge', 'sut_knowledge')]:
+                    if context.get(context_key) is not None:
+                        context[context_key] = None
+                        omitted = True
+                        if context.get('selected_run') is not None:
+                            context['selected_run'][fact_key] = None
+                        if facts is not None and facts.get(fact_key) is not None:
+                            facts[fact_key] = {'sources': [], 'diagnostics': ['Knowledge omitted to fit report context budget.']}
+                if omitted and context.get('auto_report') is not None:
+                    context['auto_report']['budget_diagnostics'] = ['Optional knowledge omitted to fit report context budget.']
+
             auto_seen = set()
             auto_read = set()
             auto_summary = None
@@ -536,6 +551,7 @@ class Assistant:
                                 'offset': page['offset'], 'next_offset': page['next_offset'], 'sha256': ref.sha256,
                                 'coverage': 'Partial report only. Only the latest test detail page is shown and citable; earlier detail pages are not retained.', 'tests_with_sections_shared': 0}
                 context['auto_report'] = auto_summary
+                make_room_for_report()
                 while auto_summary['failures'] and len(json.dumps(context).encode()) > 44000:
                     auto_summary['failures'].pop()
                 consumed = auto_summary['offset'] + len(auto_summary['failures'])
@@ -638,6 +654,7 @@ class Assistant:
                                 context['auto_report'] = auto_summary
                                 report_shared = None
                                 context.pop('report_attachment', None)
+                                make_room_for_report()
                                 while auto_summary['failures'] and len(json.dumps(context).encode()) > 44000:
                                     auto_summary['failures'].pop()
                                 consumed = auto_summary['offset'] + len(auto_summary['failures'])
@@ -659,6 +676,7 @@ class Assistant:
                                 auto_summary['failure_names_omitted'] = True
                                 report_shared = {**page, 'test_id': operation.test_id}
                                 context['report_attachment'] = report_shared
+                                make_room_for_report()
                                 while report_shared['items'] and len(json.dumps(context).encode()) > 44000:
                                     report_shared['items'].pop()
                                 consumed = report_shared['offset'] + len(report_shared['items'])
