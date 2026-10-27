@@ -39,7 +39,10 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
                         value = element.text or ''
                         records.append({'section_id': str(len(records)), 'kind': element.tag,
                                         'depth': len(stack), 'name': element.get('name', '')[:300],
-                                        'text': value[:TEXT_LIMIT], 'truncated': len(value) > TEXT_LIMIT})
+                                        'text': value[:TEXT_LIMIT], 'truncated': len(value) > TEXT_LIMIT,
+                                        'status': element.get('status') if element.tag == 'status' else None,
+                                        'type': element.get('type') if element.tag == 'kw' else None,
+                                        'level': element.get('level') if element.tag == 'msg' else None})
                     if element.tag == 'test':
                         if current['id'] == test_id:
                             selected = records
@@ -47,7 +50,7 @@ def inspect_robot(body, sha, offset=0, limit=20, test_id=None):
                         current = None
                 element.clear()
                 stack.pop()
-    except (ParseError, DefusedXmlException):
+    except (ParseError, DefusedXmlException, LookupError):
         raise PlanError('invalid_report', 'Malformed or unsafe XML report.', 422) from None
     base = {'sha256': sha, 'total_tests': len(tests), 'scope': 'operator_uploaded',
             'limitations': ['Local inspection only; not shared with AI.',

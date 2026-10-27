@@ -35,3 +35,20 @@ def test_scope_delete_and_query_validation(tmp_path):
     assert client.get(url, params={'test_id': '0'}).status_code == 404
     client.delete(path + '/' + item)
     assert client.get(url).status_code == 404
+
+
+def test_detail_preserves_robot_status_type_and_level():
+    body = b'<robot><suite><test name="x"><kw name="setup" type="SETUP"><msg level="FAIL">broken</msg><status status="FAIL"/></kw><status status="FAIL"/></test></suite></robot>'
+    items = inspect_robot(body, 'hash', test_id='0')['items']
+    assert any(item['kind'] == 'status' and item['status'] == 'FAIL' for item in items)
+    assert any(item['kind'] == 'kw' and item['type'] == 'SETUP' for item in items)
+    assert any(item['kind'] == 'msg' and item['level'] == 'FAIL' for item in items)
+
+
+def test_unknown_xml_encoding_returns_422(tmp_path):
+    client = TestClient(create_app(data=tmp_path, monitoring=False))
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    upload = client.post(path, params={'filename': 'output.xml'}, content=b'<?xml version="1.0" encoding="made-up"?><robot/>')
+    assert upload.status_code == 200
+    assert client.get(path + '/' + upload.json()['id'] + '/robot-report').status_code == 422
