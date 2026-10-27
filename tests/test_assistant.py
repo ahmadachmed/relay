@@ -558,3 +558,85 @@ def test_optional_knowledge_diagnostics_cannot_overflow_base_context(harness, mo
     assert fake.calls[-1]['selected_run']['knowledge'] is None
     assert result.json()['facts']['knowledge']['sources'] == []
     assert 'omitted' in result.json()['facts']['knowledge']['diagnostics'][0]
+
+
+def test_attachment_is_only_shared_with_explicit_scoped_reference(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    other = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = b'<robot><suite><test name="Test"><kw name="Call"><msg level="FAIL">password=secret123</msg><status status="FAIL"/></kw><status status="FAIL"/></test></suite></robot>'
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'offset':0, 'share':True}
+    assert post(client).status_code == 200
+    assert 'report_attachment' not in fake.calls[-1]
+    assert post(client, report_attachment={**ref, 'share':False}).status_code == 422
+    assert post(client, report_attachment={**ref, 'conversation_id':other}).status_code == 404
+    assert post(client, report_attachment={**ref, 'sha256':'0'*64}).status_code == 409
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    sent = fake.calls[-1]['report_attachment']
+    assert sent['sha256'] == item['sha256'] and sent['test_id'] == '0'
+    assert 'secret123' not in json.dumps(sent)
+    assert sent == result.json()['report_shared']
+    section_id = sent['items'][0]['section_id']
+    fake.result = answer(action='answer', report_citations=[{'section_id':section_id, 'claim':'A shared section.'}])
+    assert post(client, report_attachment=ref).status_code == 200
+    fake.result = answer(action='answer', report_citations=[{'section_id':'999', 'claim':'Never shared.'}])
+    assert post(client, report_attachment=ref).status_code == 502
+    assert post(client).status_code == 502
+    fake.result = answer()
+    assert post(client, report_attachment={**ref, 'test_id':'999'}).status_code == 404
+    client.delete(path + '/' + item['id'])
+    assert post(client, report_attachment=ref).status_code == 404
+
+
+def test_deleted_attachment_during_model_call_discards_response(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    item = client.post(path, params={'filename':'output.xml'}, content=b'<robot><suite><test name="x"><status status="FAIL"/></test></suite></robot>').json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    class DeleteDuringCall:
+        async def answer(self, context):
+            app.state.assistant.conversation_files.delete(scope, item['id'])
+            return answer(action='answer')
+    app.state.assistant.provider = DeleteDuringCall()
+    response = post(client, report_attachment=ref)
+    assert response.status_code == 404
+
+
+def test_report_redacts_before_truncation_including_names(harness, monkeypatch):
+    app, client, fake = harness
+    secret = 'private-key-' + 'A' * 140
+    monkeypatch.setenv('RELAY_TEST_SECRET', secret)
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="' + 'x'*250 + secret + '"><kw name="' + 'y'*250 + secret + '"><msg>' + 'z'*1900 + secret + '</msg><status status="FAIL"/></kw><status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    assert 'private-key-' not in json.dumps(fake.calls[-1]['report_attachment'])
+    assert '[REDACTED]' in json.dumps(fake.calls[-1]['report_attachment'])
+
+
+def test_report_unicode_fits_budget_and_citations_only_cover_included_sections(harness):
+    app, client, fake = harness
+    scope = client.post('/api/conversations').json()['id']
+    path = f'/api/conversations/{scope}/attachments'
+    body = ('<robot><suite><test name="x">' + ('<msg>' + '漢'*2000 + '</msg>')*20 + '<status status="FAIL"/></test></suite></robot>').encode()
+    item = client.post(path, params={'filename':'output.xml'}, content=body).json()
+    ref = {'conversation_id':scope, 'attachment_id':item['id'], 'sha256':item['sha256'], 'test_id':'0', 'share':True}
+    result = post(client, report_attachment=ref)
+    assert result.status_code == 200
+    shared = result.json()['report_shared']
+    assert 0 < len(shared['items']) < 20
+    assert shared['next_offset'] == len(shared['items'])
+    assert len(json.dumps(fake.calls[-1]).encode()) <= 48000
+    fake.result = answer(action='answer', report_citations=[{'section_id':str(shared['next_offset']), 'claim':'Not shared'}])
+    assert post(client, report_attachment=ref).status_code == 502
+    fake.result = answer()
+    next_page = post(client, report_attachment={**ref, 'offset':shared['next_offset']})
+    assert next_page.status_code == 200
+    assert next_page.json()['report_shared']['items'][0]['section_id'] == str(shared['next_offset'])

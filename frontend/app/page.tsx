@@ -47,12 +47,16 @@ type Context = {
   branch: string;
   parameters: Record<string, string>;
 };
+type ReportPage = {sha256:string;total:number;offset:number;next_offset:number|null;items:{id:string;name:string;status:string}[]};
+type SharedReport = {attachment_id:string;sha256:string;test_id:string;test:{id:string;name:string;status:string};offset:number;total:number;next_offset:number|null;items:{section_id:string;kind:string;text:string;name:string;truncated:boolean;status?:string|null}[]};
 type AiReply = {
+  report_shared?: SharedReport | null;
   source_manifest?: SourceManifest | null;
   planning_knowledge?: {automation:Knowledge|null;sut:Knowledge|null} | null;
   run_id: string | null;
   answer: {
     source_citations?: {handle:string;claim:string}[];
+    report_citations?: {section_id:string;claim:string}[];
     missing_context?: string[];
     classification?: { category: "suspected_product_bug" | "suspected_automation_bug" | "environment_infrastructure" | "inconclusive"; reason: string; artifact_ids: string[]; verification: string } | null;
     action: "clarify" | "propose" | "analyze" | "cancel" | "answer";
@@ -188,7 +192,7 @@ export default function Workspace() {
   const [conversations, setConversations] = useState<Record<string, Message[]>>({});
   const conversationKey = selected || "planning";
   const messages = conversations[conversationKey] || (selected ? [] : [initialMessage]);
-  type ConversationFile = {id:string;filename:string;size:number;status:string};
+  type ConversationFile = {id:string;filename:string;size:number;status:string;sha256:string};
   const [attachmentScope,setAttachmentScope]=useState("");
   const [scopeGeneration,setScopeGeneration]=useState(0);
   const [attachmentMap,setAttachmentMap]=useState<Record<string,ConversationFile[]>>({});
@@ -197,6 +201,22 @@ export default function Workspace() {
   const [attachmentBusy,setAttachmentBusy]=useState(false);
   const [uploadRetry,setUploadRetry]=useState<{scope:string;files:File[]}|null>(null);
   const attachmentInput=useRef<HTMLInputElement>(null);
+  const [reportFile,setReportFile]=useState("");
+  const [reportPage,setReportPage]=useState<ReportPage|null>(null);
+  const [reportOffset,setReportOffset]=useState(0);
+  const [reportTest,setReportTest]=useState("");
+  const [sectionOffset,setSectionOffset]=useState(0);
+  const [shareReport,setShareReport]=useState(false);
+  const [reportError,setReportError]=useState("");
+  useEffect(()=>{setReportFile("");setReportPage(null);setReportTest("");setShareReport(false);setReportOffset(0);setSectionOffset(0);},[attachmentScope]);
+  useEffect(()=>{
+    let live=true;setReportPage(null);setReportTest("");setShareReport(false);setReportError("");
+    if(reportFile && attachmentScope){
+      api<ReportPage>(`/api/conversations/${attachmentScope}/attachments/${reportFile}/robot-report?offset=${reportOffset}&limit=20`)
+        .then(page=>{if(live)setReportPage(page);}).catch(e=>{if(live)setReportError(errorText(e));});
+    }
+    return()=>{live=false;};
+  },[reportFile,attachmentScope,reportOffset]);
   useEffect(()=>{
     let live=true;setAttachmentScope("");setAttachmentError("");
     async function load(){
@@ -223,7 +243,7 @@ export default function Workspace() {
     } catch(e) {setUploadRetry({scope,files:files.slice(index)});setAttachmentError(errorText(e));}
     finally {setAttachmentBusy(false);if(attachmentInput.current)attachmentInput.current.value="";}
   }
-  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));}catch(e){setAttachmentError(errorText(e));}}
+  async function removeAttachment(id:string){const scope=attachmentScope;try{await api(`/api/conversations/${scope}/attachments/${id}`,{method:"DELETE"});setAttachmentMap(old=>({...old,[scope]:(old[scope]||[]).filter(x=>x.id!==id)}));setReportFile(current=>current===id?"":current);}catch(e){setAttachmentError(errorText(e));}}
   function excludePriorHistory() {
     const last = messages.at(-1);
     if (last?.id) setHistoryBoundary(old=>({...old,[conversationKey]:last.id!}));
@@ -233,7 +253,7 @@ export default function Workspace() {
   }, [conversationKey, selected]);
   const [command, setCommand] = useState("");
   const [error, setError] = useState("");
-  const [aiError, setAiError] = useState<{message: string; text: string; proposeKnowledge?: boolean} | null>(null);
+  const [aiError, setAiError] = useState<{message: string; text: string; proposeKnowledge?: boolean; reportUsed?: boolean} | null>(null);
   const [historyError, setHistoryError] = useState("");
   const [runError, setRunError] = useState("");
   const [evidenceError, setEvidenceError] = useState("");
@@ -721,9 +741,13 @@ export default function Workspace() {
     // A follow-up may change the intended target; never leave an old plan runnable.
     setPlan(null);
     const version = revision.current;
+    const reportUsed = shareReport && !!reportPage && !!reportTest && !!reportFile && !!attachmentScope;
+    const reportAttachment = reportUsed ? {conversation_id:attachmentScope, attachment_id:reportFile, sha256:reportPage!.sha256, test_id:reportTest, offset:sectionOffset, share:true} : null;
+    setShareReport(false);
     try {
       const value = await post<AiReply>("/api/assistant/chat", {
         message: text,
+        report_attachment: reportAttachment,
         propose_knowledge: proposeKnowledge,
         share_context: true,
         include_source_context: shareSources,
@@ -759,7 +783,7 @@ export default function Workspace() {
         });
       }
     } catch (e) {
-      if (version === revision.current) setAiError({message: errorText(e), text, proposeKnowledge});
+      if (version === revision.current) setAiError({message: errorText(e), text, proposeKnowledge, reportUsed});
     } finally {
       aiLock.current = false;
       actionLock.current = false;
@@ -1024,9 +1048,9 @@ export default function Workspace() {
           </div>
           {aiError && (
             <div className="error-banner" role="alert">
-              {aiError.message} Retry sends this message to AI again; review sharing settings if needed.
-              <button className="text-button" disabled={Boolean(busy) || !shareAi || !aiEnabled}
-                onClick={() => void askAi(aiError.text, aiError.proposeKnowledge)}>Retry AI message</button>
+              {aiError.message} {aiError.reportUsed ? "Select the report and approve sharing again before resending the message." : "Retry sends this message to AI again; review sharing settings if needed."}
+              {!aiError.reportUsed && <button className="text-button" disabled={Boolean(busy) || !shareAi || !aiEnabled}
+                onClick={() => void askAi(aiError.text, aiError.proposeKnowledge)}>Retry AI message</button>}
               <button className="text-button" onClick={() => setAiError(null)}>Dismiss</button>
             </div>
           )}
@@ -1066,6 +1090,7 @@ export default function Workspace() {
                 </div>
               </div>
               <div className="ai-body">
+                {aiReply.report_shared && <section aria-label="Report details shared with AI"><h3>Report details shared with AI</h3><p>User-uploaded file; association with a pipeline is unverified. Test {aiReply.report_shared.test_id}: {aiReply.report_shared.test.name} ({aiReply.report_shared.test.status}); SHA-256 {aiReply.report_shared.sha256}. Showing {aiReply.report_shared.items.length} of {aiReply.report_shared.total} sections, starting at {aiReply.report_shared.offset}. {aiReply.report_shared.next_offset !== null ? "More sections were not shared." : ""} A section may be truncated; citation membership does not validate AI claims.</p>{(aiReply.answer.report_citations || []).length > 0 && <ul aria-label="Report citations">{aiReply.answer.report_citations!.map((citation,i)=><li key={i}><a href={`#report-section-${citation.section_id}`}>Section {citation.section_id}</a>: {citation.claim}</li>)}</ul>}<ul>{aiReply.report_shared.items.map(item=><li id={`report-section-${item.section_id}`} key={item.section_id}>Section {item.section_id} · {item.kind} {item.name} {item.status || ""}: {item.text}{item.truncated ? " [truncated]" : ""}</li>)}</ul></section>}
                 {aiReply.source_manifest && <SourceReferences key={aiReply.source_manifest.id} manifest={aiReply.source_manifest} citations={aiReply.answer.source_citations || []}/>}
                 {aiReply.planning_knowledge && <section aria-label="Planning knowledge"><h3>Planning references</h3><p>Reference knowledge, not observed run evidence.</p>{Object.entries(aiReply.planning_knowledge).map(([category,bundle])=>bundle && <div key={category}><strong>{category}</strong><ul>{bundle.sources.map(source=><li key={source.id}>{source.path} · SHA256 {source.sha256}</li>)}{bundle.diagnostics.map((d,i)=><li key={i}>{d}</li>)}</ul></div>)}</section>}
 
@@ -1547,8 +1572,14 @@ export default function Workspace() {
         </div>
         <div className="composer-wrap">
 
+          {attachments.some(file=>file.filename.toLowerCase().endsWith(".xml")) && <section aria-label="Report context for next AI message">
+            <label>Robot report <select value={reportFile} disabled={Boolean(busy)} onChange={e=>{setReportFile(e.target.value);setReportOffset(0);setSectionOffset(0);setShareReport(false);}}><option value="">Do not share a report</option>{attachments.filter(file=>file.filename.toLowerCase().endsWith(".xml")).map(file=><option key={file.id} value={file.id}>{file.filename}</option>)}</select></label>
+            {reportError && <p role="alert">{reportError}</p>}
+            {reportPage && <><label>Failure <select value={reportTest} onChange={e=>{setReportTest(e.target.value);setSectionOffset(0);setShareReport(false);}}><option value="">Select a failure</option>{reportPage.items.map(item=><option key={item.id} value={item.id}>{item.name} (test {item.id})</option>)}</select></label><p>{reportPage.total} failed tests; showing {reportPage.items.length} from {reportPage.offset + 1}.</p><button type="button" disabled={reportOffset===0} onClick={()=>setReportOffset(Math.max(0,reportOffset-20))}>Previous failures</button><button type="button" disabled={reportPage.next_offset===null} onClick={()=>setReportOffset(reportPage.next_offset!)}>Next failures</button></>}
+            {reportTest && <><label>Starting section <input type="number" min={0} max={100000} value={sectionOffset} onChange={e=>{setSectionOffset(Math.max(0,Math.min(100000,Number(e.target.value)||0)));setShareReport(false);}} /></label><label><input type="checkbox" checked={shareReport} onChange={e=>setShareReport(e.target.checked)} /> Share up to 20 sections from this test with the configured AI provider for the next message. Report content may contain sensitive data; redaction is best effort.</label></>}
+          </section>}
           <form className="composer" onSubmit={sendCommand}>
-            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified, not analyzed <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>{if(uploadRetry?.scope===attachmentScope)void attachFiles(uploadRetry.files,uploadRetry.scope);else setScopeGeneration(old=>old+1);}}>Retry</button></span>}</div>
+            <div className="composer-files" aria-live="polite">{attachments.map(file=><span key={file.id}>{file.filename} · {Math.ceil(file.size/1024)} KB · Stored; format unverified <button type="button" aria-label={`Remove ${file.filename}`} onClick={()=>void removeAttachment(file.id)}><X size={13}/></button></span>)}{attachmentBusy&&<span role="status">Uploading…</span>}{attachmentError&&<span role="alert">{attachmentError} <button type="button" onClick={()=>{if(uploadRetry?.scope===attachmentScope)void attachFiles(uploadRetry.files,uploadRetry.scope);else setScopeGeneration(old=>old+1);}}>Retry</button></span>}</div>
             <input ref={attachmentInput} className="sr-only" type="file" multiple accept=".xml,.txt,.md,.pdf,.docx" onChange={e=>void attachFiles(Array.from(e.target.files||[]))}/>
             <button type="button" aria-label="Attach files" disabled={Boolean(busy)||attachmentBusy||!attachmentScope} onClick={()=>attachmentInput.current?.click()}><Paperclip size={18}/></button>
             <label className="sr-only" htmlFor="command">
@@ -1613,7 +1644,7 @@ export default function Workspace() {
             return identity && source.scope_id === (source.category==="sut"?identity.sut:identity.project) && source.environments.includes(identity.environment || "");
           })} selected={sourceIds} consent={shareSources} busy={Boolean(busy)} onChange={(ids,consent)=>{revision.current++;setSourceIds(ids);setShareSources(consent);setReplies({});excludePriorHistory();setAiError(null);}}/>}
           {aiEnabled && (
-            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for planning or the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for planning or the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort; raw artifacts are not sent.</p>
+            <details className="ai-sharing"><summary>Settings · AI context sharing</summary><label><input type="checkbox" checked={shareKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved automation knowledge for planning or the selected run</label><label><input type="checkbox" checked={shareSutKnowledge} disabled={Boolean(busy)} onChange={e=>{revision.current++;setShareSutKnowledge(e.target.checked);setReplies({});setAiError(null);}}/>Include approved SUT knowledge for planning or the selected run</label><p>Off by default. When enabled, applicable private knowledge documents are redacted and sent to the configured AI provider, which may be upstream of 9router.</p><p>Chat, context, run summaries and optional failure details go to the configured model provider. Local gateways may forward data upstream. Redaction is best-effort. Full raw files are not sent; selected report excerpts may be shared with approval.</p>
               <label>
                 <input
                   type="checkbox"
